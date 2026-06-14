@@ -1,0 +1,6 @@
+{
+  "name": "Guitar Tuner",
+  "description": "Simplistic and accurate standard tuning guitar tuner designed for pro guitarists.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
