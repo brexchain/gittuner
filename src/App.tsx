@@ -21,6 +21,39 @@ const SMOOTHING_PRESETS: SmoothingPreset[] = [
   { name: "Träge", alpha: 0.15, description: "Maximale Trägheit gegen zittrige Greifer oder Windböen" },
 ];
 
+interface Chord {
+  name: string;
+  frets: (number | "X")[]; // string 6 down to 1 (E A D G H E)
+  fingering?: (string | null)[]; // string 6 down to 1 finger markings
+  barre?: { fret: number; fromStringIdx: number; toStringIdx: number };
+  tags: ("basis" | "7th" | "barre")[];
+}
+
+const COMMON_CHORDS: Chord[] = [
+  { name: "C", frets: ["X", 3, 2, 0, 1, 0], fingering: [null, "3", "2", null, "1", null], tags: ["basis"] },
+  { name: "A", frets: ["X", 0, 2, 2, 2, 0], fingering: [null, null, "1", "2", "3", null], tags: ["basis"] },
+  { name: "G", frets: [3, 2, 0, 0, 0, 3], fingering: ["3", "2", null, null, null, "4"], tags: ["basis"] },
+  { name: "E", frets: [0, 2, 2, 1, 0, 0], fingering: [null, "2", "3", "1", null, null], tags: ["basis"] },
+  { name: "D", frets: ["X", "X", 0, 2, 3, 2], fingering: [null, null, null, "1", "3", "2"], tags: ["basis"] },
+  { name: "Am", frets: ["X", 0, 2, 2, 1, 0], fingering: [null, null, "2", "3", "1", null], tags: ["basis"] },
+  { name: "Dm", frets: ["X", "X", 0, 2, 3, 1], fingering: [null, null, null, "2", "3", "1"], tags: ["basis"] },
+  { name: "Em", frets: [0, 2, 2, 0, 0, 0], fingering: [null, "2", "3", null, null, null], tags: ["basis"] },
+  // Barré-Griffe
+  { name: "F", frets: [1, 3, 3, 2, 1, 1], fingering: ["1", "3", "4", "2", "1", "1"], barre: { fret: 1, fromStringIdx: 0, toStringIdx: 5 }, tags: ["barre"] },
+  { name: "Fm", frets: [1, 3, 3, 1, 1, 1], fingering: ["1", "3", "4", "1", "1", "1"], barre: { fret: 1, fromStringIdx: 0, toStringIdx: 5 }, tags: ["barre"] },
+  { name: "Hm", frets: ["X", 2, 4, 4, 3, 2], fingering: [null, "1", "3", "4", "2", "1"], barre: { fret: 2, fromStringIdx: 1, toStringIdx: 5 }, tags: ["barre"] },
+  { name: "C#m", frets: ["X", 4, 6, 6, 5, 4], fingering: [null, "1", "3", "4", "2", "1"], barre: { fret: 4, fromStringIdx: 1, toStringIdx: 5 }, tags: ["barre"] },
+  { name: "Gm", frets: [3, 5, 5, 3, 3, 3], fingering: ["1", "3", "4", "1", "1", "1"], barre: { fret: 3, fromStringIdx: 0, toStringIdx: 5 }, tags: ["barre"] },
+  { name: "Cm", frets: ["X", 3, 5, 5, 4, 3], fingering: [null, "1", "3", "4", "2", "1"], barre: { fret: 3, fromStringIdx: 1, toStringIdx: 5 }, tags: ["barre"] },
+  // 7er Akkorde
+  { name: "D7", frets: ["X", "X", 0, 2, 1, 2], fingering: [null, null, null, "2", "1", "3"], tags: ["7th"] },
+  { name: "Am7", frets: ["X", 0, 2, 0, 1, 0], fingering: [null, null, "2", null, "1", null], tags: ["7th"] },
+  { name: "C7", frets: ["X", 3, 2, 3, 1, 0], fingering: [null, "3", "2", "4", "1", null], tags: ["7th"] },
+  { name: "G7", frets: [3, 2, 0, 0, 0, 1], fingering: ["3", "2", null, null, null, "1"], tags: ["7th"] },
+  { name: "E7", frets: [0, 2, 0, 1, 0, 0], fingering: [null, "2", null, "1", null, null], tags: ["7th"] },
+  { name: "A7", frets: ["X", 0, 2, 0, 2, 0], fingering: [null, null, "1", null, "2", null], tags: ["7th"] },
+];
+
 export default function App() {
   // Audio state references
   const audioCtxRef = useRef<AudioContext | null>(null);
@@ -52,6 +85,9 @@ export default function App() {
   // Settings states
   const [selectedPreset, setSelectedPreset] = useState<SmoothingPreset>(SMOOTHING_PRESETS[1]); // Standard
   const [targetStringLock, setTargetStringLock] = useState<number | null>(null); // null = auto detect
+  const [displayMode, setDisplayMode] = useState<"soundhole" | "led-bar">("soundhole");
+  const [selectedChord, setSelectedChord] = useState<Chord>(COMMON_CHORDS[0]);
+  const [chordFilter, setChordFilter] = useState<"all" | "basis" | "7th" | "barre">("all");
 
   // Interactive "afterglow" state for the last strummed note / tuning delta
   const [lastStrum, setLastStrum] = useState<{
@@ -154,6 +190,59 @@ export default function App() {
 
     } catch (err) {
       console.error("Synthesizer failed:", err);
+    }
+  };
+
+  const playChord = (chord: Chord) => {
+    try {
+      let audioCtx = audioCtxRef.current;
+      if (!audioCtx || audioCtx.state === "closed") {
+        const AudioCtxClass = window.AudioContext || (window as any).webkitAudioContext;
+        audioCtx = new AudioCtxClass();
+        audioCtxRef.current = audioCtx;
+      }
+
+      if (audioCtx.state === "suspended") {
+        audioCtx.resume();
+      }
+
+      // Stop any single active reference tone
+      stopReferencePitch();
+
+      const stringsCopy = [...STANDARD_GUITAR_STRINGS].reverse(); // from String 6 to 1
+
+      stringsCopy.forEach((str, index) => {
+        const fret = chord.frets[index];
+        if (fret === "X") return;
+
+        // Calculate frequency
+        const freq = str.frequency * Math.pow(2, Number(fret) / 12);
+        const staggerSeconds = 0.055 * index; // beautiful, relaxed strum cadence
+
+        const playTime = audioCtx!.currentTime + staggerSeconds;
+
+        const osc = audioCtx!.createOscillator();
+        const gainNode = audioCtx!.createGain();
+
+        // Let's use clean "triangle" oscillators for warm resonance
+        osc.type = "triangle";
+        osc.frequency.setValueAtTime(freq, playTime);
+
+        gainNode.gain.setValueAtTime(0, audioCtx!.currentTime);
+        gainNode.gain.setValueAtTime(0, playTime);
+        gainNode.gain.linearRampToValueAtTime(0.18, playTime + 0.06); // pluck onset
+        gainNode.gain.exponentialRampToValueAtTime(0.005, playTime + 2.5); // long organic acoustic sustain
+
+        osc.connect(gainNode);
+        gainNode.connect(audioCtx!.destination);
+
+        osc.start(playTime);
+
+        // Schedule stopping to conserve resources
+        osc.stop(playTime + 2.8);
+      });
+    } catch (err) {
+      console.error("Failed to synthesize strum:", err);
     }
   };
 
@@ -336,6 +425,138 @@ export default function App() {
   const clampedCents = Math.max(-50, Math.min(50, centsDiff));
   const needlePercentage = ((clampedCents + 50) / 100) * 100;
 
+  // Chord starting fret and category filtering calculations
+  const fretsAsNumbers = selectedChord.frets.filter((f): f is number => typeof f === "number" && f > 0);
+  const maxFret = fretsAsNumbers.length > 0 ? Math.max(...fretsAsNumbers) : 0;
+  const startFret = maxFret > 5 ? Math.min(...fretsAsNumbers) : 1;
+  const showNut = startFret === 1;
+  const filteredChords = chordFilter === "all" 
+    ? COMMON_CHORDS 
+    : COMMON_CHORDS.filter(c => c.tags.includes(chordFilter));
+
+  // Helper to render the LED segment metric (Horizontal Tuning Bar)
+  const renderHorizontalTuningBar = () => {
+    const totalTiles = 29;
+    const activeIdx = hasSignal ? Math.round(((clampedCents + 50) / 100) * (totalTiles - 1)) : -1;
+
+    // Calculate last strum afterglow index & opacity
+    let lastStrumIdx = -1;
+    let lastStrumOpacity = 0;
+    let isLastStrumInTune = false;
+
+    if (lastStrum) {
+      const elapsed = Date.now() - lastStrum.timestamp;
+      lastStrumOpacity = Math.max(0, Math.min(1, 1 - (elapsed - 1000) / 3000));
+      
+      if (lastStrumOpacity > 0) {
+        const lastClampedCents = Math.max(-50, Math.min(50, lastStrum.cents));
+        lastStrumIdx = Math.round(((lastClampedCents + 50) / 100) * (totalTiles - 1));
+        isLastStrumInTune = Math.abs(lastStrum.cents) <= 3;
+      }
+    }
+
+    return (
+      <div className="relative h-20 flex flex-col justify-end w-full max-w-xl mx-auto px-1 animate-fade-in">
+        {/* Scale Labels */}
+        <div className="w-full flex justify-between text-[9px] font-mono text-white/40 tracking-tighter uppercase px-1 mb-1.5">
+          <span>-50 Cent (Schlaff)</span>
+          <span>-25</span>
+          <span className={`transition-all duration-300 font-bold ${
+            hasSignal && isInTune ? "text-green-400 font-black shadow-sm" : "text-white/60"
+          }`}>
+            Passt!
+          </span>
+          <span>+25</span>
+          <span>+50 Cent (Stramm)</span>
+        </div>
+        
+        {/* Interactive Bar Grid container - Styled as vertical LED segments */}
+        <div className="w-full h-10 bg-[#0A0A0A] rounded-md flex items-center justify-between gap-[3px] px-2 border border-white/10 relative">
+          {Array.from({ length: totalTiles }).map((_, i) => {
+            const isActive = hasSignal && activeIdx === i;
+            const distance = hasSignal ? Math.abs(i - activeIdx) : -1;
+            const isNear = distance === 1;
+
+            const isLastStrumActive = !hasSignal && lastStrumIdx === i && lastStrumOpacity > 0;
+            const isLastStrumNear = !hasSignal && Math.abs(i - lastStrumIdx) === 1 && lastStrumOpacity > 0;
+
+            // Determine base LED scale colors (dim state)
+            let baseColor = "bg-red-500/10";
+            if (i >= 13 && i <= 15) {
+              baseColor = "bg-green-500/15";
+            } else if ((i >= 11 && i <= 12) || (i >= 16 && i <= 17)) {
+              baseColor = "bg-yellow-500/10";
+            }
+
+            // Determine brightly lit active state colors
+            let litColor = "bg-red-500 shadow-[0_0_12px_rgba(239,68,68,0.85)]";
+            if (i >= 13 && i <= 15) {
+              litColor = "bg-green-400 shadow-[0_0_16px_rgba(34,197,94,0.95)]";
+            } else if ((i >= 11 && i <= 12) || (i >= 16 && i <= 17)) {
+              litColor = "bg-yellow-400 shadow-[0_0_14px_rgba(234,179,8,0.9)]";
+            }
+
+            // Assign segment heights
+            let heightClass = "h-[45%]";
+            if (i === 14) {
+              heightClass = "h-[75%]"; // absolute center tick is taller
+            } else if (i === 0 || i === 28) {
+              heightClass = "h-[65%]"; // outer boundary ticks are moderately tall
+            } else if (i === 7 || i === 21) {
+              heightClass = "h-[55%]"; // intermediate ticks
+            }
+
+            // Apply active glow and sizing modifications
+            let finalStyle = baseColor;
+            let inlineStyle: CSSProperties = {};
+
+            if (isActive) {
+              finalStyle = litColor;
+              heightClass = "h-[90%]";
+            } else if (isNear) {
+              let nearColor = "bg-red-500/40";
+              if (i >= 13 && i <= 15) {
+                nearColor = "bg-green-500/40";
+              } else if ((i >= 11 && i <= 12) || (i >= 16 && i <= 17)) {
+                nearColor = "bg-yellow-500/40";
+              }
+              finalStyle = nearColor;
+              heightClass = "h-[70%]";
+            } else if (isLastStrumActive) {
+              let afterglowColor = isLastStrumInTune 
+                ? "bg-green-400/90 shadow-[0_0_16px_rgba(34,197,94,0.8)] border border-green-300" 
+                : "bg-red-500/90 shadow-[0_0_12px_rgba(239,68,68,0.7)] border border-red-300";
+              if ((lastStrumIdx >= 11 && lastStrumIdx <= 12) || (lastStrumIdx >= 16 && lastStrumIdx <= 17)) {
+                afterglowColor = "bg-yellow-400/90 shadow-[0_0_14px_rgba(234,179,8,0.7)] border border-yellow-300";
+              }
+              finalStyle = afterglowColor;
+              heightClass = "h-[90%]";
+              inlineStyle = { opacity: lastStrumOpacity };
+            } else if (isLastStrumNear) {
+              let afterglowNearColor = isLastStrumInTune 
+                ? "bg-green-500/40" 
+                : "bg-red-500/40";
+              if ((lastStrumIdx >= 11 && lastStrumIdx <= 12) || (lastStrumIdx >= 16 && lastStrumIdx <= 17)) {
+                afterglowNearColor = "bg-yellow-500/40";
+              }
+              finalStyle = afterglowNearColor;
+              heightClass = "h-[70%]";
+              inlineStyle = { opacity: lastStrumOpacity };
+            }
+
+            return (
+              <div
+                key={i}
+                className={`flex-1 rounded-sm transition-all duration-75 ease-out ${finalStyle} ${heightClass}`}
+                style={inlineStyle}
+              />
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className="min-h-screen bg-[#0A0A0A] text-[#F5F5F5] flex flex-col justify-between font-sans transition-colors duration-300 relative overflow-hidden select-none">
       
@@ -376,250 +597,647 @@ export default function App() {
           </div>
         </div>
       </header>
-
-      {/* Main Pitch display Canvas */}
       <main className="flex-1 flex flex-col items-center justify-center relative px-4 py-8 sm:py-16">
+        {/* Inline CSS animations for physically realistic string vibration */}
+        <style>{`
+          @keyframes vibrateStringAnimation {
+            0% { transform: translate(0, 0); }
+            20% { transform: translate(-1.2px, 0.4px); }
+            40% { transform: translate(1.2px, -0.4px); }
+            60% { transform: translate(-0.8px, -0.2px); }
+            80% { transform: translate(0.8px, 0.2px); }
+            100% { transform: translate(0, 0); }
+          }
+          .animate-string-vibrate {
+            animation: vibrateStringAnimation 0.08s infinite linear;
+          }
+        `}</style>
         
-        {/* Centered Pitch Indicator Line (Static Backdrop Overlay) */}
-        <div className="absolute inset-x-0 inset-y-0 pointer-events-none flex justify-center z-0">
-          <div className="h-full w-[1.5px] bg-white/10 relative">
-            <div className={`absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-4 h-4 rounded-full transition-all duration-500 ${
-              hasSignal && isInTune 
-                ? "bg-green-400 shadow-[0_0_25px_#22c55e,0_0_10px_#22c55e]" 
-                : "bg-white/40 shadow-[0_0_15px_rgba(255,255,255,0.2)]"
-            }`} />
+        {/* Centered Pitch Indicator Line (Static Backdrop Overlay only for standard display) */}
+        {displayMode === "led-bar" && (
+          <div className="absolute inset-x-0 inset-y-0 pointer-events-none flex justify-center z-0">
+            <div className="h-full w-[1.5px] bg-white/10 relative">
+              <div className={`absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-4 h-4 rounded-full transition-all duration-500 ${
+                hasSignal && isInTune 
+                  ? "bg-green-400 shadow-[0_0_25px_#22c55e,0_0_10px_#22c55e]" 
+                  : "bg-white/40 shadow-[0_0_15px_rgba(255,255,255,0.2)]"
+              }`} />
+            </div>
+          </div>
+        )}
+
+        {/* Display Mode Rocker Switch */}
+        <div className="relative z-20 flex justify-center mb-6">
+          <div className="flex bg-neutral-900/80 p-1 rounded-full border border-white/10 shadow-2xl">
+            <button
+              id="view-toggle-soundhole"
+              onClick={() => setDisplayMode("soundhole")}
+              className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-[10px] font-bold transition-all uppercase tracking-wider cursor-pointer select-none ${
+                displayMode === "soundhole"
+                  ? "bg-amber-600 text-white shadow-md shadow-amber-900/40"
+                  : "text-white/40 hover:text-white/75"
+              }`}
+            >
+              <span>🎸 Akustik-Schallloch</span>
+            </button>
+            <button
+              id="view-toggle-led"
+              onClick={() => setDisplayMode("led-bar")}
+              className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-[10px] font-bold transition-all uppercase tracking-wider cursor-pointer select-none ${
+                displayMode === "led-bar"
+                  ? "bg-white/10 text-white shadow-md"
+                  : "text-white/40 hover:text-white/75"
+              }`}
+            >
+              <span>📊 Studio-Balken</span>
+            </button>
           </div>
         </div>
 
-        {/* Huge Note Indicator Container */}
-        <div className="relative z-10 flex flex-col items-center justify-center text-center h-[240px] sm:h-[330px] md:h-[385px] w-full overflow-hidden">
-          {hasSignal && closestString ? (
-            <div className="flex flex-col items-center justify-center w-full h-full">
-              {/* Massive Bold Character Wrapper with custom fixed heights to prevent jumps */}
-              <div className="h-[140px] sm:h-[210px] md:h-[260px] flex items-center justify-center relative w-full">
-                <div 
-                  id="huge-note-indicator" 
-                  className={`text-[150px] sm:text-[230px] md:text-[280px] leading-none font-black tracking-tighter transition-all duration-150 ${
-                    isInTune 
-                      ? "text-green-400 drop-shadow-[0_0_35px_rgba(34,197,94,0.25)]" 
-                      : "text-white"
-                  }`}
-                >
-                  {closestString.note}
-                  <span className="text-3xl sm:text-4xl md:text-5xl align-top font-light text-white/35 ml-1 inline-block">
-                    {closestString.pitch.replace(closestString.note, "")}
-                  </span>
-                </div>
-              </div>
+        {displayMode === "soundhole" ? (
+          /* ==================== ACOUSTIC SOUNDHOLE CALIBRATOR ==================== */
+          <div className="relative z-10 flex flex-col items-center justify-center w-full my-auto">
+            {/* The Rosette Body container */}
+            <div className="relative w-64 h-64 sm:w-[290px] sm:h-[290px] md:w-[325px] md:h-[325px] rounded-full p-[10px] bg-gradient-to-br from-[#8C5230] via-[#5C3218] to-[#2B1408] shadow-[0_20px_50px_rgba(0,0,0,0.85),inset_0_2px_12px_rgba(255,255,255,0.15)] border border-[#8C5230]/40 flex items-center justify-center select-none transition-all">
+              
+              {/* Wooden Inlaid Concentric Rosette Rings */}
+              <div className="absolute inset-4 rounded-full border-4 border-double border-yellow-600/35 pointer-events-none" />
+              <div className="absolute inset-7 rounded-full border border-yellow-700/20 pointer-events-none" />
+              <div className="absolute inset-[3px] rounded-full border border-black/40 pointer-events-none" />
 
-              {/* Stabilized frequency display in centered row */}
-              <div className="h-[28px] flex items-center justify-center w-full mt-2 sm:mt-4">
-                <div id="live-hertz-frequency" className={`text-lg sm:text-xl font-mono tracking-widest font-bold uppercase transition-colors ${
-                  isInTune ? "text-green-500" : "text-white/60"
-                }`}>
-                  {frequency.toFixed(2)} HZ
-                </div>
-              </div>
+              {/* Black Soundhole Deep interior cavity */}
+              <div className="w-full h-full rounded-full bg-[#030303] relative overflow-hidden flex flex-col items-center justify-center shadow-[inset_0_10px_35px_rgba(0,0,0,0.96)] border-2 border-neutral-950">
+                
+                {/* 6 Acoustic Steel Strings overlay vertically */}
+                <div className="absolute inset-x-0 top-0 bottom-0 flex justify-between px-10 sm:px-14 md:px-16 pointer-events-none z-10">
+                  {(() => {
+                    const stringPositions = [
+                      { num: 6, label: "E", thickness: "w-[4.2px] sm:w-[5px]" },
+                      { num: 5, label: "A", thickness: "w-[3.3px] sm:w-[3.9px]" },
+                      { num: 4, label: "D", thickness: "w-[2.6px] sm:w-[3.1px]" },
+                      { num: 3, label: "G", thickness: "w-[2.0px] sm:w-[2.4px]" },
+                      { num: 2, label: "H", thickness: "w-[1.4px] sm:w-[1.7px]" },
+                      { num: 1, label: "E", thickness: "w-[0.9px] sm:w-[1.1px]" }
+                    ];
 
-              {/* Realtime cents offset display feedback in centered row */}
-              <div className="h-[32px] flex items-center justify-center w-full mt-2 sm:mt-3">
-                <div className="text-[11px] font-mono uppercase tracking-[0.2em] text-white/40 font-bold">
-                  {centsDiff === 0 
-                    ? "PASST PERFEKT! ROCK ON! 🤘" 
-                    : `${Math.abs(centsDiff).toFixed(1)} CENT ${centsDiff > 0 ? "ZU STRAMM (LOCKERN!) 🥵" : "ZU SCHLAFF (SPANNEN!) 🥶"}`
-                  }
+                    return [...stringPositions].reverse().map((str) => {
+                      const isDetected = hasSignal && closestString?.number === str.num;
+                      
+                      // Check if manual audio bummton is playing this string
+                      const isBrummtonActive = playingStringNum === str.num;
+
+                      const shouldVibrate = isDetected || isBrummtonActive;
+                      
+                      let stringColor = "bg-gradient-to-r from-zinc-500 via-zinc-400 to-zinc-600 shadow-[1px_0_1px_rgba(0,0,0,0.4)]";
+                      if (shouldVibrate) {
+                        stringColor = "bg-gradient-to-r from-yellow-300 via-amber-400 to-yellow-500 shadow-[0_0_10px_rgb(234,179,8),0_0_2px_white]";
+                      }
+
+                      return (
+                        <div key={str.num} className="h-full flex flex-col items-center relative opacity-80">
+                          {/* Label at top background */}
+                          <div className={`absolute top-4 sm:top-5 font-mono text-[9px] font-bold ${isDetected ? "text-yellow-400 font-extrabold" : "text-white/10"}`}>
+                            {str.label}
+                          </div>
+
+                          <div 
+                            className={`h-full ${str.thickness} ${stringColor} transition-all duration-300 ${shouldVibrate ? "animate-string-vibrate" : ""}`} 
+                          />
+                        </div>
+                      );
+                    });
+                  })()}
                 </div>
+
+                {/* Subdued content center: Detected Note displayed like a glowing wood burned stamp */}
+                <div className="relative z-20 flex flex-col items-center justify-center text-center select-none pointer-events-none mix-blend-screen">
+                  {hasSignal && closestString ? (
+                    <div className="flex flex-col items-center">
+                      <span className={`text-[85px] sm:text-[105px] md:text-[115px] font-black tracking-tighter leading-none select-none transition-all duration-300 ${
+                        isInTune 
+                          ? "text-green-400 drop-shadow-[0_0_25px_rgba(34,197,94,0.45)]" 
+                          : "text-white/90 drop-shadow-[0_4px_10px_rgba(0,0,0,0.85)]"
+                      }`}>
+                        {closestString.note}
+                        <span className="text-xl sm:text-2xl font-light text-white/40 align-super select-none ml-0.5">
+                          {closestString.pitch.replace(closestString.note, "")}
+                        </span>
+                      </span>
+                      <span className={`text-[9px] font-mono tracking-[0.25em] font-bold uppercase -mt-2 ${isInTune ? "text-green-400" : "text-yellow-500/80"}`}>
+                        {isInTune ? "STIMMT PERFEKT!" : `${centsDiff > 0 ? "ZU STRAMM" : "ZU SCHLAFF"}`}
+                      </span>
+                    </div>
+                  ) : playingStringNum !== null ? (
+                    (() => {
+                      const playingStr = STANDARD_GUITAR_STRINGS.find(s => s.number === playingStringNum);
+                      return playingStr ? (
+                        <div className="flex flex-col items-center justify-center">
+                          <span className="text-[85px] sm:text-[105px] font-black tracking-tighter text-green-400/90 leading-none drop-shadow-[0_0_20px_rgba(34,197,94,0.35)]">
+                            {playingStr.note}
+                            <span className="text-xl font-light text-green-400/50 align-super ml-0.5">
+                              {playingStr.pitch.replace(playingStr.note, "")}
+                            </span>
+                          </span>
+                          <span className="text-[8px] font-mono tracking-widest text-green-400/70 uppercase font-bold -mt-2">
+                            BRUMMTON REFERENZ
+                          </span>
+                        </div>
+                      ) : null;
+                    })()
+                  ) : (
+                    <div className="flex flex-col items-center justify-center py-4">
+                      <span className="text-[30px] sm:text-[36px] font-black text-white/10 uppercase italic tracking-wider leading-none select-none">
+                        ZUPFEN! 🎸
+                      </span>
+                      <span className="text-[8px] font-mono tracking-[0.2em] text-white/20 uppercase font-bold mt-1">
+                        {isListening ? "HÖRE ZU..." : "STILL"}
+                      </span>
+                    </div>
+                  )}
+                </div>
+
+                {/* SVG Overlay: Curved Calibration Grid & Swing Needle Pointer */}
+                <svg viewBox="0 0 240 240" className="absolute inset-0 w-full h-full pointer-events-none z-30">
+                  {/* Anchor/Pivot points cap near the lower quadrant */}
+                  <circle cx="120" cy="180" r="10" className="fill-[#1F1916] stroke-amber-600/70 stroke-2" />
+                  <circle cx="120" cy="180" r="4.5" className="fill-amber-500" />
+
+                  {/* Tick Gauge Elements */}
+                  {(() => {
+                    const elements = [];
+                    // From -50 to +50 cents, steps of 5 cents
+                    for (let c = -50; c <= 50; c += 5) {
+                      const tickAngle = c * 1.35; // maps from -67.5 to +67.5 deg
+                      const angleRad = ((90 - tickAngle) * Math.PI) / 180;
+                      
+                      // Outer radius 122
+                      const x1 = 120 + 122 * Math.cos(angleRad);
+                      const y1 = 180 - 122 * Math.sin(angleRad);
+                      
+                      // Inner radius 111 for major ticks, 116 for minor ticks
+                      const isMajor = c % 10 === 0;
+                      const innerRadius = isMajor ? 111 : 116;
+                      const x2 = 120 + innerRadius * Math.cos(angleRad);
+                      const y2 = 180 - innerRadius * Math.sin(angleRad);
+                      
+                      // Color categorization
+                      let tickColorClass = "stroke-red-500/30";
+                      if (Math.abs(c) <= 3) {
+                        tickColorClass = "stroke-green-400 stroke-[2.2px] opacity-60";
+                      } else if (Math.abs(c) <= 15) {
+                        tickColorClass = "stroke-yellow-500/25";
+                      }
+                      
+                      // Highlight active tick if needle is close
+                      const isLit = hasSignal && Math.abs(clampedCents - c) <= 2.5;
+                      if (isLit) {
+                        if (Math.abs(c) <= 3) {
+                          tickColorClass = "stroke-green-400 stroke-[3.5px] drop-shadow-[0_0_10px_#22c55e]";
+                        } else if (Math.abs(c) <= 15) {
+                          tickColorClass = "stroke-yellow-400 stroke-[3px] drop-shadow-[0_0_8px_#eab308]";
+                        } else {
+                          tickColorClass = "stroke-red-500 stroke-[3px] drop-shadow-[0_0_8px_#ef4444]";
+                        }
+                      }
+                      
+                      elements.push(
+                        <line
+                          key={c}
+                          x1={x1}
+                          y1={y1}
+                          x2={x2}
+                          y2={y2}
+                          className={`transition-all duration-75 ease-out ${tickColorClass}`}
+                        />
+                      );
+                    }
+                    return elements;
+                  })()}
+
+                  {/* Glowing perfect target line in center */}
+                  <line 
+                    x1="120" 
+                    y1="50" 
+                    x2="120" 
+                    y2="62" 
+                    className={`stroke-2 transition-all duration-300 ${hasSignal && isInTune ? "stroke-green-400 stroke-[3px] drop-shadow-[0_0_8px_#22c55e]" : "stroke-white/20"}`} 
+                  />
+
+                  {/* Sweep-Hand Needle Pointer */}
+                  {(() => {
+                    const needleAngle = hasSignal ? clampedCents * 1.35 : 0;
+                    const angleRad = ((90 - needleAngle) * Math.PI) / 180;
+                    const len = 112;
+                    const targetX = 120 + len * Math.cos(angleRad);
+                    const targetY = 180 - len * Math.sin(angleRad);
+
+                    let needleColor = "stroke-amber-400";
+                    let glowFilter = "drop-shadow(0 0 4px rgba(245,158,11,0.5))";
+
+                    if (hasSignal) {
+                      if (isInTune) {
+                        needleColor = "stroke-green-400";
+                        glowFilter = "drop-shadow(0 0 12px #22c55e)";
+                      } else if (Math.abs(centsDiff) <= 15) {
+                        needleColor = "stroke-yellow-400";
+                        glowFilter = "drop-shadow(0 0 8px #eab308)";
+                      } else {
+                        needleColor = "stroke-red-500";
+                        glowFilter = "drop-shadow(0 0 8px #ef4444)";
+                      }
+                    } else {
+                      // Quiet states
+                      needleColor = "stroke-white/15";
+                      glowFilter = "none";
+                    }
+
+                    return (
+                      <g style={{ filter: glowFilter }} className="transition-all duration-150 ease-out">
+                        {/* Needle line body */}
+                        <line 
+                          x1="120" 
+                          y1="180" 
+                          x2={targetX} 
+                          y2={targetY} 
+                          className="stroke-[3.5px] rounded-full transition-all duration-100 ease-out"
+                          stroke={needleColor}
+                          strokeLinecap="round"
+                        />
+                        {/* Needle head bead */}
+                        <circle cx={targetX} cy={targetY} r="3" fill={isInTune ? "#22c55e" : hasSignal ? (Math.abs(centsDiff) <= 15 ? "#eab308" : "#ef4444") : "rgba(255,255,255,0.25)"} />
+                      </g>
+                    );
+                  })()}
+                </svg>
+
               </div>
             </div>
-          ) : playingStringNum !== null ? (
-            (() => {
-              const playingStr = STANDARD_GUITAR_STRINGS.find(s => s.number === playingStringNum);
-              return playingStr ? (
-                <div className="flex flex-col items-center justify-center w-full h-full">
-                  {/* Status indicator active badge row */}
-                  <div className="h-[24px] flex items-center justify-center w-full mb-2 sm:mb-4">
-                    <div className="px-2.5 py-1 rounded bg-white/5 border border-white/10 font-mono text-[10px] text-green-400 tracking-wider uppercase flex items-center gap-1.5 animate-pulse">
-                      <Volume2 size={11} />
-                      <span>Acoustischer Brummton Aktiv 📢</span>
-                    </div>
-                  </div>
 
-                  {/* Massive Bold Character */}
-                  <div className="h-[140px] sm:h-[210px] md:h-[260px] flex items-center justify-center relative w-full">
-                    <div className="text-[150px] sm:text-[230px] md:text-[280px] leading-none font-black tracking-tighter text-green-400 drop-shadow-[0_0_35px_rgba(34,197,94,0.25)]">
-                      {playingStr.note}
-                      <span className="text-3xl sm:text-4xl md:text-5xl align-top font-light text-white/35 ml-1 inline-block">
-                        {playingStr.pitch.replace(playingStr.note, "")}
+            {/* Subtitle feedback under the wooden gauge */}
+            <div className="mt-6 flex gap-6 text-center text-xs font-mono select-none">
+              <div>
+                <span className="text-white/30 block text-[9px] uppercase tracking-wider mb-0.5 font-bold">Hz-Frequenz</span>
+                <span className={`text-base font-bold tracking-wider transition-colors ${isInTune ? "text-green-400 shadow-sm" : "text-white/80"}`}>
+                  {hasSignal ? `${frequency.toFixed(2)} Hz` : "---"}
+                </span>
+              </div>
+              <div className="w-[1px] bg-white/10 self-stretch" />
+              <div>
+                <span className="text-white/30 block text-[9px] uppercase tracking-wider mb-0.5 font-bold">Stimm-Abweich</span>
+                <span className={`text-base font-bold tracking-wider transition-colors ${isInTune ? "text-green-400" : Math.abs(centsDiff) <= 15 ? "text-yellow-400" : "text-red-400"}`}>
+                  {hasSignal ? `${centsDiff > 0 ? "+" : ""}${centsDiff.toFixed(1)} Cent` : "---"}
+                </span>
+              </div>
+            </div>
+          </div>
+        ) : (
+          /* ==================== THE TRADITIONAL HUGE NOTE INDICATOR CONTAINER ==================== */
+          <div className="relative z-10 flex flex-col items-center justify-between text-center min-h-[300px] sm:min-h-[380px] md:min-h-[440px] w-full max-w-xl overflow-hidden animate-fade-in gap-5">
+            <div className="flex-1 flex flex-col items-center justify-center w-full">
+              {hasSignal && closestString ? (
+                <div className="flex flex-col items-center justify-center w-full h-full">
+                  {/* Massive Bold Character Wrapper with custom fixed heights to prevent jumps */}
+                  <div className="h-[140px] sm:h-[190px] md:h-[240px] flex items-center justify-center relative w-full">
+                    <div 
+                      id="huge-note-indicator" 
+                      className={`text-[120px] sm:text-[180px] md:text-[220px] leading-none font-black tracking-tighter transition-all duration-150 ${
+                        isInTune 
+                          ? "text-green-400 drop-shadow-[0_0_35px_rgba(34,197,94,0.25)]" 
+                          : "text-white"
+                      }`}
+                    >
+                      {closestString.note}
+                      <span className="text-2xl sm:text-3xl md:text-4xl align-top font-light text-white/35 ml-1 inline-block">
+                        {closestString.pitch.replace(closestString.note, "")}
                       </span>
                     </div>
                   </div>
-
-                  {/* Frequency display row */}
-                  <div className="h-[28px] flex items-center justify-center w-full mt-2 sm:mt-4">
-                    <div className="-mt-1 sm:-mt-3 text-lg sm:text-xl font-mono tracking-widest font-bold uppercase text-green-500">
-                      {playingStr.frequency.toFixed(2)} HZ
+                </div>
+              ) : playingStringNum !== null ? (
+                (() => {
+                  const playingStr = STANDARD_GUITAR_STRINGS.find(s => s.number === playingStringNum);
+                  return playingStr ? (
+                    <div className="flex flex-col items-center justify-center w-full h-full">
+                      {/* Massive Bold Character */}
+                      <div className="h-[140px] sm:h-[190px] md:h-[240px] flex items-center justify-center relative w-full">
+                        <div className="text-[120px] sm:text-[180px] md:text-[220px] leading-none font-black tracking-tighter text-green-400 drop-shadow-[0_0_35px_rgba(34,197,94,0.25)]">
+                          {playingStr.note}
+                          <span className="text-2xl sm:text-3xl md:text-4xl align-top font-light text-white/35 ml-1 inline-block">
+                            {playingStr.pitch.replace(playingStr.note, "")}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  ) : null;
+                })()
+              ) : (
+                <div className="flex flex-col items-center justify-center w-full h-full animate-pulse-slow">
+                  {/* Massive Standby Text Wrapper */}
+                  <div className="h-[140px] sm:h-[190px] md:h-[240px] flex items-center justify-center relative w-full">
+                    <div className="text-[42px] sm:text-[64px] md:text-[80px] leading-none font-black tracking-tight text-white/20 uppercase italic transition-all duration-300">
+                      ZUPF MAL AN! 🎸
                     </div>
                   </div>
-
-                  {/* Description subtitle row */}
-                  <div className="h-[32px] flex items-center justify-center w-full mt-2 sm:mt-3">
-                    <div className="text-[11px] font-mono uppercase tracking-[0.2em] text-white/40 font-bold">
-                      KÜNSTLICHER BRUMMTON-REFERENZWERT
-                    </div>
-                  </div>
                 </div>
-              ) : null;
-            })()
-          ) : (
-            <div className="flex flex-col items-center justify-center w-full h-full">
-              {/* Spacing empty block to match State 2 header */}
-              <div className="h-[24px] w-full mb-2 sm:mb-4" />
-
-              {/* Massive Standby Text Wrapper */}
-              <div className="h-[140px] sm:h-[210px] md:h-[260px] flex items-center justify-center relative w-full">
-                <div className="text-[55px] sm:text-[85px] md:text-[100px] leading-none font-black tracking-tight text-white/20 uppercase italic transition-all duration-300">
-                  ZUPF MAL AN! 🎸
-                </div>
-              </div>
-
-              {/* Status Subtitle Wrapper */}
-              <div className="h-[28px] flex items-center justify-center w-full mt-2 sm:mt-4">
-                <div className="text-xs sm:text-sm font-mono tracking-[0.25em] text-white/30 uppercase font-semibold">
-                  {isListening ? "Warte auf heftige Saiten-Vibrations..." : "Stimmgerät pennt grad"}
-                </div>
-              </div>
-
-              {/* Bottom empty spacing block to align vertical height exactly */}
-              <div className="h-[32px] w-full mt-2 sm:mt-3" />
+              )}
             </div>
-          )}
-        </div>
+
+            {/* Embedded Active Metric: Horizontal Tuning Bar */}
+            {renderHorizontalTuningBar()}
+          </div>
+        )}
       </main>
 
       {/* Footer Interface Sector: Dial + Selector + Drawer Settings */}
       <section className="w-full max-w-3xl mx-auto px-6 sm:px-10 pb-8 sm:pb-12 relative z-10">
         
-        {/* Horizontal Tuning Bar (Pro-grade calibration meter) */}
-        <div className="relative h-24 flex flex-col justify-end">
-          {/* Scale Labels */}
-          <div className="w-full flex justify-between text-[10px] font-mono text-white/40 tracking-tighter uppercase px-1 mb-2">
-            <span>-50 Cent (Schlaff)</span>
-            <span>-25</span>
-            <span className={`transition-all duration-300 font-bold ${
-              hasSignal && isInTune ? "text-green-400 font-black shadow-sm" : "text-white/60"
+        {/* Swapped-in: HZ + CENTS DETAILS DASHBOARD CARD */}
+        <div id="calibration-details-dashboard" className="bg-neutral-900/40 border border-white/5 rounded-2xl p-4 sm:p-5 flex justify-around items-center text-center font-mono select-none shadow-lg">
+          <div className="flex-1 flex flex-col items-center">
+            <span className="text-white/25 block text-[9px] uppercase tracking-[0.2em] mb-1.5 font-bold">HZ-FREQUENZ 📊</span>
+            <span id="live-hertz-frequency" className={`text-base sm:text-lg font-bold tracking-widest uppercase transition-colors ${
+              hasSignal && isInTune ? "text-green-500" : "text-white/80"
             }`}>
-              Passt!
-            </span>
-            <span>+25</span>
-            <span>+50 Cent (Stramm)</span>
-          </div>
-          
-          {/* Interactive Bar Grid container - Styled as vertical LED segments */}
-          <div className="w-full h-12 bg-[#0A0A0A] rounded-md flex items-center justify-between gap-[3px] px-2 border border-white/10 relative">
-            {(() => {
-              const totalTiles = 29;
-              const activeIdx = hasSignal ? Math.round(((clampedCents + 50) / 100) * (totalTiles - 1)) : -1;
-
-              // Calculate last strum afterglow index & opacity
-              let lastStrumIdx = -1;
-              let lastStrumOpacity = 0;
-              let isLastStrumInTune = false;
-
-              if (lastStrum) {
-                const elapsed = Date.now() - lastStrum.timestamp;
-                // Perfect decay: remain bright for 1 second, then fade out linearly over 3 seconds
-                lastStrumOpacity = Math.max(0, Math.min(1, 1 - (elapsed - 1000) / 3000));
-                
-                if (lastStrumOpacity > 0) {
-                  const lastClampedCents = Math.max(-50, Math.min(50, lastStrum.cents));
-                  lastStrumIdx = Math.round(((lastClampedCents + 50) / 100) * (totalTiles - 1));
-                  isLastStrumInTune = Math.abs(lastStrum.cents) <= 3;
-                }
+              {hasSignal 
+                ? `${frequency.toFixed(2)} Hz` 
+                : playingStringNum !== null 
+                  ? `${STANDARD_GUITAR_STRINGS.find(s => s.number === playingStringNum)?.frequency.toFixed(2)} Hz` 
+                  : "---"
               }
+            </span>
+          </div>
 
-              return Array.from({ length: totalTiles }).map((_, i) => {
-                const isActive = hasSignal && activeIdx === i;
-                const distance = hasSignal ? Math.abs(i - activeIdx) : -1;
-                const isNear = distance === 1;
+          <div className="w-[1px] bg-white/10 self-stretch my-1" />
 
-                // Is this tile illuminated by the last-strum afterglow ghost effect?
-                const isLastStrumActive = !hasSignal && lastStrumIdx === i && lastStrumOpacity > 0;
-                const isLastStrumNear = !hasSignal && Math.abs(i - lastStrumIdx) === 1 && lastStrumOpacity > 0;
+          <div className="flex-1 flex flex-col items-center">
+            <span className="text-white/25 block text-[9px] uppercase tracking-[0.2em] mb-1.5 font-bold">ABWEICHUNG 🎯</span>
+            <span id="live-cents-deviation" className={`text-xs sm:text-sm font-sans font-extrabold tracking-wider transition-colors uppercase ${
+              hasSignal 
+                ? isInTune 
+                  ? "text-green-400" 
+                  : Math.abs(centsDiff) <= 15 
+                    ? "text-yellow-400" 
+                    : "text-red-400" 
+                : "text-white/30"
+            }`}>
+              {hasSignal 
+                ? centsDiff === 0 
+                  ? "STIMMT PERFEKT! 🤘" 
+                  : `${Math.abs(centsDiff).toFixed(1)} Cent ${centsDiff > 0 ? "zu stramm" : "zu schlaff"}`
+                : playingStringNum !== null 
+                  ? "REFERENZTON" 
+                  : isListening 
+                    ? "HÖRE ZU..." 
+                    : "STUMM"
+              }
+            </span>
+          </div>
+        </div>
 
-                // Determine base LED scale colors (dim state)
-                let baseColor = "bg-red-500/10";
-                if (i >= 13 && i <= 15) {
-                  baseColor = "bg-green-500/15";
-                } else if ((i >= 11 && i <= 12) || (i >= 16 && i <= 17)) {
-                  baseColor = "bg-yellow-500/10";
-                }
+        {/* ==================== INTERACTIVE CHORD DISPLAY ==================== */}
+        <div id="chord-display-container" className="mt-8 bg-neutral-900/40 border border-white/5 rounded-2xl p-4 sm:p-5 flex flex-col md:flex-row items-stretch gap-6 justify-between shadow-xl">
+          <div className="flex-1 flex flex-col w-full justify-between">
+            <div>
+              <div className="flex justify-between items-center mb-4">
+                <div>
+                  <h4 className="text-xs uppercase tracking-[0.2em] text-white/40 font-bold flex items-center gap-1.5">
+                    <Zap size={11} className="text-amber-500" />
+                    <span>Akkord-Bibliothek 📖</span>
+                  </h4>
+                  <p className="text-[10px] text-white/20 mt-0.5 font-mono">
+                    Wähle einen Akkord aus, um das Griffbild anzuzeigen und anzuschlagen
+                  </p>
+                </div>
+                <button 
+                  id="play-strum-chord"
+                  onClick={() => playChord(selectedChord)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-amber-600 hover:bg-amber-500 text-white text-[10px] font-bold tracking-wider uppercase transition-all shadow-md shadow-amber-900/30 cursor-pointer"
+                >
+                  <Volume2 size={11} />
+                  <span>Anschlagen 🔊</span>
+                </button>
+              </div>
 
-                // Determine brightly lit active state colors
-                let litColor = "bg-red-500 shadow-[0_0_12px_rgba(239,68,68,0.85)]";
-                if (i >= 13 && i <= 15) {
-                  litColor = "bg-green-400 shadow-[0_0_16px_rgba(34,197,94,0.95)]";
-                } else if ((i >= 11 && i <= 12) || (i >= 16 && i <= 17)) {
-                  litColor = "bg-yellow-400 shadow-[0_0_14px_rgba(234,179,8,0.9)]";
-                }
+              {/* Categorization Tabs */}
+              <div className="flex flex-wrap gap-1 bg-black/40 p-1 rounded-lg border border-white/5 mb-3">
+                {[
+                  { id: "all", label: "Alle" },
+                  { id: "basis", label: "Grundakkorde" },
+                  { id: "7th", label: "7er Akkorde" },
+                  { id: "barre", label: "Barré-Griffe" }
+                ].map((tab) => (
+                  <button
+                    key={tab.id}
+                    onClick={() => setChordFilter(tab.id as any)}
+                    className={`text-[10px] font-mono py-1 px-2.5 rounded transition-all select-none cursor-pointer ${
+                      chordFilter === tab.id
+                        ? "bg-white/10 text-amber-400 font-bold"
+                        : "text-white/45 hover:text-white/80"
+                    }`}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
 
-                // Assign segment heights
-                let heightClass = "h-[45%]";
-                if (i === 14) {
-                  heightClass = "h-[75%]"; // absolute center tick is taller
-                } else if (i === 0 || i === 28) {
-                  heightClass = "h-[65%]"; // outer boundary ticks are moderately tall
-                } else if (i === 7 || i === 21) {
-                  heightClass = "h-[55%]"; // intermediate ticks
-                }
+              {/* Grid of Chord Buttons */}
+              <div className="grid grid-cols-4 sm:grid-cols-5 gap-1.5 w-full">
+                {filteredChords.map((chord) => {
+                  const isCurrent = selectedChord.name === chord.name;
+                  return (
+                    <button
+                      id={`chord-btn-${chord.name.toLowerCase().replace(" ", "-").replace("#", "sharp")}`}
+                      key={chord.name}
+                      onClick={() => {
+                        setSelectedChord(chord);
+                        playChord(chord); // Automatically strum on select for great UX
+                      }}
+                      className={`text-[11px] font-bold uppercase py-1.5 rounded-lg border transition-all text-center cursor-pointer select-none ${
+                        isCurrent
+                          ? "bg-amber-600/20 border-amber-500 text-amber-400 font-black shadow-inner shadow-amber-950/40"
+                          : "border-white/5 bg-white/5 text-white/60 hover:text-white hover:bg-white/10"
+                      }`}
+                    >
+                      {chord.name}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+            
+            <div className="mt-4 flex flex-wrap gap-2 text-[10px] items-center text-white/35 font-mono">
+              <span className="font-bold uppercase tracking-wider text-white/50">Details:</span>
+              <span>Saiten (von links nach rechts):</span>
+              <span className="bg-white/5 px-2 py-0.5 rounded text-white/60 border border-white/10">
+                {selectedChord.frets.map((f, i) => {
+                  const stringLabels = ["E/6", "A/5", "D/4", "G/3", "H/2", "E/1"];
+                  return `${stringLabels[i]}:${f}`;
+                }).join(" | ")}
+              </span>
+            </div>
+          </div>
 
-                // Apply active glow and sizing modifications
-                let finalStyle = baseColor;
-                let inlineStyle: CSSProperties = {};
-
-                if (isActive) {
-                  finalStyle = litColor;
-                  heightClass = "h-[90%]"; // extend active column
-                } else if (isNear) {
-                  let nearColor = "bg-red-500/40";
-                  if (i >= 13 && i <= 15) {
-                    nearColor = "bg-green-500/40";
-                  } else if ((i >= 11 && i <= 12) || (i >= 16 && i <= 17)) {
-                    nearColor = "bg-yellow-500/40";
-                  }
-                  finalStyle = nearColor;
-                  heightClass = "h-[70%]";
-                } else if (isLastStrumActive) {
-                  // Elegant glowing afterglow shadow representation
-                  let afterglowColor = isLastStrumInTune 
-                    ? "bg-green-400/90 shadow-[0_0_16px_rgba(34,197,94,0.8)] border border-green-300" 
-                    : "bg-red-500/90 shadow-[0_0_12px_rgba(239,68,68,0.7)] border border-red-300";
-                  if ((lastStrumIdx >= 11 && lastStrumIdx <= 12) || (lastStrumIdx >= 16 && lastStrumIdx <= 17)) {
-                    afterglowColor = "bg-yellow-400/90 shadow-[0_0_14px_rgba(234,179,8,0.7)] border border-yellow-300";
-                  }
-                  finalStyle = afterglowColor;
-                  heightClass = "h-[90%]";
-                  inlineStyle = { opacity: lastStrumOpacity };
-                } else if (isLastStrumNear) {
-                  let afterglowNearColor = isLastStrumInTune 
-                    ? "bg-green-500/40" 
-                    : "bg-red-500/40";
-                  if ((lastStrumIdx >= 11 && lastStrumIdx <= 12) || (lastStrumIdx >= 16 && lastStrumIdx <= 17)) {
-                    afterglowNearColor = "bg-yellow-500/40";
-                  }
-                  finalStyle = afterglowNearColor;
-                  heightClass = "h-[70%]";
-                  inlineStyle = { opacity: lastStrumOpacity };
-                }
-
-                return (
-                  <div
+          {/* SVG Fretboard Chord Diagram */}
+          <div id="chord-fretboard-graphic" className="shrink-0 flex items-center justify-center p-2.5 bg-black/60 rounded-xl border border-white/10 shadow-inner w-[160px] h-[155px]">
+            <svg viewBox="0 0 140 135" className="w-full h-full text-white/80 font-sans pointer-events-none">
+              {/* String names above the frets */}
+              {(() => {
+                const notes = ["E2", "A2", "D3", "G3", "H3", "E4"];
+                return notes.map((note, i) => (
+                  <text
                     key={i}
-                    className={`flex-1 rounded-sm transition-all duration-75 ease-out ${finalStyle} ${heightClass}`}
-                    style={inlineStyle}
+                    x={20 + i * 20}
+                    y={11}
+                    textAnchor="middle"
+                    className="font-mono text-[8.5px] fill-white/30 font-bold"
+                  >
+                    {note}
+                  </text>
+                ));
+              })()}
+
+              {/* Fretboard Grid Lines */}
+              {/* Vertical Strings */}
+              {Array.from({ length: 6 }).map((_, i) => (
+                <line
+                  key={`string-${i}`}
+                  x1={20 + i * 20}
+                  y1={25}
+                  x2={20 + i * 20}
+                  y2={125}
+                  className="stroke-zinc-600"
+                  strokeWidth="1.2"
+                />
+              ))}
+
+              {/* Nut (Thickened Fret 0 line) or top single fret boundary */}
+              {showNut ? (
+                <line
+                  x1={18}
+                  y1={25}
+                  x2={122}
+                  y2={25}
+                  className="stroke-amber-400"
+                  strokeWidth="3.5"
+                />
+              ) : (
+                <line
+                  x1={20}
+                  y1={25}
+                  x2={120}
+                  y2={25}
+                  className="stroke-zinc-700"
+                  strokeWidth="1.5"
+                />
+              )}
+
+              {/* Horizontal Frets 1 to 5 */}
+              {Array.from({ length: 5 }).map((_, i) => (
+                <line
+                  key={`fret-${i}`}
+                  x1={20}
+                  y1={25 + (i + 1) * 20}
+                  x2={120}
+                  y2={25 + (i + 1) * 20}
+                  className="stroke-zinc-700"
+                  strokeWidth="1"
+                />
+              ))}
+
+              {/* Fret number labels on the left margin */}
+              {Array.from({ length: 5 }).map((_, i) => (
+                <text
+                  key={`fret-label-${i}`}
+                  x={8}
+                  y={35 + i * 20}
+                  textAnchor="middle"
+                  className="font-mono text-[7.5px] fill-white/20 font-bold"
+                >
+                  {startFret + i}
+                </text>
+              ))}
+
+              {/* Transparent background guide for Barré chord block (Fingers) */}
+              {selectedChord.barre && (() => {
+                const { fret, fromStringIdx, toStringIdx } = selectedChord.barre;
+                const relativeFret = fret - startFret + 1;
+                const yPos = 25 + (relativeFret - 0.5) * 20;
+                const x1 = 20 + fromStringIdx * 20;
+                const w = (toStringIdx - fromStringIdx) * 20;
+                return (
+                  <rect
+                    key="barre-indicator"
+                    x={x1 - 4}
+                    y={yPos - 5}
+                    width={w + 8}
+                    height={10}
+                    rx={5}
+                    className="fill-amber-500/70 stroke-amber-400/40 stroke-1"
                   />
                 );
-              });
-            })()}
+              })()}
+
+              {/* Open, Pressed or Muted Indicators */}
+              {selectedChord.frets.map((fret, i) => {
+                const xPos = 20 + i * 20;
+
+                // Case 1: Muted string 'X'
+                if (fret === "X") {
+                  return (
+                    <g key={`muted-${i}`}>
+                      <line x1={xPos - 3} y1={15} x2={xPos + 3} y2={21} className="stroke-red-500/80 stroke-2" />
+                      <line x1={xPos + 3} y1={15} x2={xPos - 3} y2={21} className="stroke-red-500/80 stroke-2" />
+                    </g>
+                  );
+                }
+
+                // Case 2: Open string '0' (draw a small circle at the top)
+                if (fret === 0) {
+                  return (
+                    <circle
+                      key={`open-${i}`}
+                      cx={xPos}
+                      cy={18}
+                      r="3.5"
+                      className="fill-none stroke-green-400 stroke-[1.5]"
+                    />
+                  );
+                }
+
+                // Case 3: Fingering/pressed fret (with starting fret calculation offsets)
+                const relativeFret = Number(fret) - startFret + 1;
+                const yPos = 25 + (relativeFret - 0.5) * 20;
+                const fingeringNum = selectedChord.fingering?.[i] || null;
+
+                // If is part of a barre chord and is on the barre fret, we can draw a ring highlights, or skip background as it already has rect
+                const isPartOfBarreFret = selectedChord.barre && 
+                  fret === selectedChord.barre.fret && 
+                  i >= selectedChord.barre.fromStringIdx && 
+                  i <= selectedChord.barre.toStringIdx;
+
+                return (
+                  <g key={`pressed-${i}`}>
+                    {/* Circle backing (only needed if not drawn as a solid rectangle, or to give solid look for text overlay) */}
+                    <circle
+                      cx={xPos}
+                      cy={yPos}
+                      r="6.5"
+                      className={`${isPartOfBarreFret ? "fill-amber-400 stroke-zinc-900 stroke-[1]" : "fill-amber-500 stroke-white/20 stroke-[1]"}`}
+                    />
+                    {fingeringNum && (
+                      <text
+                        x={xPos}
+                        y={yPos + 2.5}
+                        textAnchor="middle"
+                        className="font-sans text-[8px] font-black fill-black"
+                      >
+                        {fingeringNum}
+                      </text>
+                    )}
+                  </g>
+                );
+              })}
+            </svg>
           </div>
         </div>
 
