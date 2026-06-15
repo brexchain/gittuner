@@ -42,9 +42,9 @@ export function detectGuitarPitch(buffer: Float32Array, sampleRate: number): num
   const maxLag = Math.min(SIZE - 2, Math.ceil(sampleRate / minFreq));
 
   // Step 3: Compute Difference Function
-  // d(tau) = sum_{i=0}^{N-tau} (x[i] - x[i+tau])^2
+  // Compute from 1 to maxLag for Cumulative Mean Normalized Difference Function
   const diffFunc = new Float32Array(maxLag + 1);
-  for (let tau = minLag; tau <= maxLag; tau++) {
+  for (let tau = 1; tau <= maxLag; tau++) {
     let sum = 0;
     const limit = SIZE - tau;
     for (let i = 0; i < limit; i++) {
@@ -54,34 +54,53 @@ export function detectGuitarPitch(buffer: Float32Array, sampleRate: number): num
     diffFunc[tau] = sum;
   }
 
-  // Step 4: Find local minima of the difference function.
-  // The first deep local minimum represents the fundamental period.
-  let minVal = Infinity;
-  let bestTau = -1;
+  // Step 4: Compute Cumulative Mean Normalized Difference Function (YIN Step 2)
+  const cmndf = new Float32Array(maxLag + 1);
+  cmndf[0] = 1;
+  let runningSum = 0;
+  for (let tau = 1; tau <= maxLag; tau++) {
+    runningSum += diffFunc[tau];
+    cmndf[tau] = runningSum > 0 ? diffFunc[tau] / (runningSum / tau) : 1;
+  }
 
-  // We look for local minima (val valley compared to neighbors)
+  // Step 5: Find the first local minimum below the absolute threshold (YIN Step 3)
+  // This helps to bypass pitch-halving/doubling sub-harmonics since we search from minLag upwards (high frequency to low frequency)
+  const threshold = 0.15;
+  let bestTau = -1;
   for (let tau = minLag + 1; tau < maxLag; tau++) {
-    if (diffFunc[tau] < diffFunc[tau - 1] && diffFunc[tau] < diffFunc[tau + 1]) {
-      // Find the absolute deepest local minimum within standard guitar bounds
-      if (diffFunc[tau] < minVal) {
-        minVal = diffFunc[tau];
+    if (cmndf[tau] < cmndf[tau - 1] && cmndf[tau] < cmndf[tau + 1]) {
+      if (cmndf[tau] < threshold) {
         bestTau = tau;
+        break;
       }
     }
   }
 
-  // Fallback: If no strict local minimum is resolved, take the absolute lowest point in range
+  // Fallback 1: If no local minimum falls below the threshold, choose the absolute deepest local minimum of the normalization
+  if (bestTau === -1) {
+    let minVal = Infinity;
+    for (let tau = minLag + 1; tau < maxLag; tau++) {
+      if (cmndf[tau] < cmndf[tau - 1] && cmndf[tau] < cmndf[tau + 1]) {
+        if (cmndf[tau] < minVal) {
+          minVal = cmndf[tau];
+          bestTau = tau;
+        }
+      }
+    }
+  }
+
+  // Fallback 2: If still no local minimum is resolved, choose the absolute lowest value in range
   if (bestTau === -1) {
     let absoluteMin = Infinity;
     for (let tau = minLag; tau <= maxLag; tau++) {
-      if (diffFunc[tau] < absoluteMin) {
-        absoluteMin = diffFunc[tau];
+      if (cmndf[tau] < absoluteMin) {
+        absoluteMin = cmndf[tau];
         bestTau = tau;
       }
     }
   }
 
-  // Step 5: Parabolic Interpolation for Sub-Sample (Cent-Level) Accuracy
+  // Step 6: Parabolic Interpolation for Sub-Sample (Cent-Level) Accuracy
   // Real guitarists need high accuracy. Interpolation lets us estimate correct period between samples.
   if (bestTau > minLag && bestTau < maxLag) {
     const alpha = diffFunc[bestTau - 1];

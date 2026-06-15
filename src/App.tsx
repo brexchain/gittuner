@@ -155,6 +155,11 @@ export default function App() {
   const lastCentsRef = useRef<number>(0);
   const alphaRef = useRef<number>(0.35);
 
+  // Auto-targeting / strike-locking trackers for pro double-tap string targeting
+  const lastPluckedStringRef = useRef<number | null>(null);
+  const lastPluckTimestampRef = useRef<number>(0);
+  const isPluckActiveRef = useRef<boolean>(false);
+
   // Sync alpha setting
   useEffect(() => {
     alphaRef.current = selectedPreset.alpha;
@@ -526,6 +531,31 @@ export default function App() {
         const rms = Math.sqrt(sumSq / buffer.length);
 
         const freq = detectGuitarPitch(buffer, audioCtx.sampleRate);
+
+        // Amplitude-based Pluck Onset Detection for Auto-Lock tracking
+        if (freq > 0 && rms > 0.010) {
+          const actualClosestRes = findClosestGuitarString(freq);
+          const actualClosestStr = actualClosestRes.closestString;
+
+          if (!isPluckActiveRef.current) {
+            isPluckActiveRef.current = true;
+            const now = Date.now();
+            const prevPlucked = lastPluckedStringRef.current;
+            const timeDiff = now - lastPluckTimestampRef.current;
+
+            // If same standard string is hit 2 times in a row within 2.8 seconds (but not immediate jitter < 150ms)
+            if (actualClosestStr && prevPlucked === actualClosestStr.number && timeDiff > 150 && timeDiff < 2800) {
+              setTargetStringLock(actualClosestStr.number);
+            }
+
+            if (actualClosestStr) {
+              lastPluckedStringRef.current = actualClosestStr.number;
+              lastPluckTimestampRef.current = now;
+            }
+          }
+        } else if (rms < 0.007) {
+          isPluckActiveRef.current = false;
+        }
 
         if (freq > 0 && rms > 0.007) {
           // Identify closest string or use manual lock
