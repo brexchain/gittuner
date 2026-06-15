@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, CSSProperties } from "react";
 import { Mic, MicOff, Volume2, Info, Settings, Zap, CheckCircle2, RefreshCw } from "lucide-react";
 import { STANDARD_GUITAR_STRINGS, GuitarString } from "./types";
 import { detectGuitarPitch, findClosestGuitarString } from "./utils/audioProcessor";
@@ -52,6 +52,13 @@ export default function App() {
   // Settings states
   const [selectedPreset, setSelectedPreset] = useState<SmoothingPreset>(SMOOTHING_PRESETS[1]); // Standard
   const [targetStringLock, setTargetStringLock] = useState<number | null>(null); // null = auto detect
+
+  // Interactive "afterglow" state for the last strummed note / tuning delta
+  const [lastStrum, setLastStrum] = useState<{
+    cents: number;
+    closestString: GuitarString;
+    timestamp: number;
+  } | null>(null);
 
   // Smoothing filters state trackers
   const lastFreqRef = useRef<number>(-1);
@@ -293,6 +300,11 @@ export default function App() {
             hasSignal: true,
             rmsValue: rms,
           });
+          setLastStrum({
+            cents: finalCents,
+            closestString: closestStr,
+            timestamp: Date.now(),
+          });
         } else {
           // No stable pitch detected or amplitude is below noise threshold
           setTuningData((prev) => ({
@@ -355,7 +367,7 @@ export default function App() {
           <span className="text-[10px] uppercase tracking-[0.3em] text-white/40 font-bold mb-1">Kammerton</span>
           <div className="text-sm font-mono tracking-wider font-semibold text-white/90">A4 = 440.0 Hz (Wie immer)</div>
         </div>
--
+
         {/* Lock / Automatic Mode Segment */}
         <div className="text-right flex flex-col items-end">
           <span className="text-[10px] uppercase tracking-[0.3em] text-white/40 font-bold mb-1">Stimm-Zustand</span>
@@ -380,71 +392,105 @@ export default function App() {
         </div>
 
         {/* Huge Note Indicator Container */}
-        <div className="relative z-10 flex flex-col items-center justify-center text-center min-h-[240px] sm:min-h-[330px] md:min-h-[385px] w-full">
+        <div className="relative z-10 flex flex-col items-center justify-center text-center h-[240px] sm:h-[330px] md:h-[385px] w-full overflow-hidden">
           {hasSignal && closestString ? (
-            <div className="flex flex-col items-center">
-              {/* Massive Bold Character */}
-              <div 
-                id="huge-note-indicator" 
-                className={`text-[150px] sm:text-[230px] md:text-[280px] leading-none font-black tracking-tighter transition-all duration-150 ${
-                  isInTune 
-                    ? "text-green-400 drop-shadow-[0_0_35px_rgba(34,197,94,0.25)]" 
-                    : "text-white"
-                }`}
-              >
-                {closestString.note}
-                <span className="text-3xl sm:text-4xl md:text-5xl align-top font-light text-white/35 ml-1 inline-block">
-                  {closestString.pitch.replace(closestString.note, "")}
-                </span>
+            <div className="flex flex-col items-center justify-center w-full h-full">
+              {/* Massive Bold Character Wrapper with custom fixed heights to prevent jumps */}
+              <div className="h-[140px] sm:h-[210px] md:h-[260px] flex items-center justify-center relative w-full">
+                <div 
+                  id="huge-note-indicator" 
+                  className={`text-[150px] sm:text-[230px] md:text-[280px] leading-none font-black tracking-tighter transition-all duration-150 ${
+                    isInTune 
+                      ? "text-green-400 drop-shadow-[0_0_35px_rgba(34,197,94,0.25)]" 
+                      : "text-white"
+                  }`}
+                >
+                  {closestString.note}
+                  <span className="text-3xl sm:text-4xl md:text-5xl align-top font-light text-white/35 ml-1 inline-block">
+                    {closestString.pitch.replace(closestString.note, "")}
+                  </span>
+                </div>
               </div>
 
-              {/* Stabilized frequency display */}
-              <div id="live-hertz-frequency" className={`-mt-1 sm:-mt-3 text-lg sm:text-xl font-mono tracking-widest font-bold uppercase transition-colors ${
-                isInTune ? "text-green-500" : "text-white/60"
-              }`}>
-                {frequency.toFixed(2)} HZ
+              {/* Stabilized frequency display in centered row */}
+              <div className="h-[28px] flex items-center justify-center w-full mt-2 sm:mt-4">
+                <div id="live-hertz-frequency" className={`text-lg sm:text-xl font-mono tracking-widest font-bold uppercase transition-colors ${
+                  isInTune ? "text-green-500" : "text-white/60"
+                }`}>
+                  {frequency.toFixed(2)} HZ
+                </div>
               </div>
 
-              {/* Realtime cents offset display feedback */}
-              <div className="mt-3 text-[11px] font-mono uppercase tracking-[0.2em] text-white/40 font-bold">
-                {centsDiff === 0 
-                  ? "PASST PERFEKT! ROCK ON! 🤘" 
-                  : `${Math.abs(centsDiff).toFixed(1)} CENT ${centsDiff > 0 ? "ZU STRAMM (LOCKERN!) 🥵" : "ZU SCHLAFF (SPANNEN!) 🥶"}`
-                }
+              {/* Realtime cents offset display feedback in centered row */}
+              <div className="h-[32px] flex items-center justify-center w-full mt-2 sm:mt-3">
+                <div className="text-[11px] font-mono uppercase tracking-[0.2em] text-white/40 font-bold">
+                  {centsDiff === 0 
+                    ? "PASST PERFEKT! ROCK ON! 🤘" 
+                    : `${Math.abs(centsDiff).toFixed(1)} CENT ${centsDiff > 0 ? "ZU STRAMM (LOCKERN!) 🥵" : "ZU SCHLAFF (SPANNEN!) 🥶"}`
+                  }
+                </div>
               </div>
             </div>
           ) : playingStringNum !== null ? (
             (() => {
               const playingStr = STANDARD_GUITAR_STRINGS.find(s => s.number === playingStringNum);
               return playingStr ? (
-                <div className="flex flex-col items-center">
-                  <div className="px-2.5 py-1 rounded bg-white/5 border border-white/10 font-mono text-[10px] text-green-400 tracking-wider uppercase mb-3 flex items-center gap-1.5 animate-pulse">
-                    <Volume2 size={11} />
-                    <span>Acoustischer Brummton Aktiv 📢</span>
+                <div className="flex flex-col items-center justify-center w-full h-full">
+                  {/* Status indicator active badge row */}
+                  <div className="h-[24px] flex items-center justify-center w-full mb-2 sm:mb-4">
+                    <div className="px-2.5 py-1 rounded bg-white/5 border border-white/10 font-mono text-[10px] text-green-400 tracking-wider uppercase flex items-center gap-1.5 animate-pulse">
+                      <Volume2 size={11} />
+                      <span>Acoustischer Brummton Aktiv 📢</span>
+                    </div>
                   </div>
-                  <div className="text-[150px] sm:text-[230px] md:text-[280px] leading-none font-black tracking-tighter text-green-400 drop-shadow-[0_0_35px_rgba(34,197,94,0.25)]">
-                    {playingStr.note}
-                    <span className="text-3xl sm:text-4xl md:text-5xl align-top font-light text-white/35 ml-1 inline-block">
-                      {playingStr.pitch.replace(playingStr.note, "")}
-                    </span>
+
+                  {/* Massive Bold Character */}
+                  <div className="h-[140px] sm:h-[210px] md:h-[260px] flex items-center justify-center relative w-full">
+                    <div className="text-[150px] sm:text-[230px] md:text-[280px] leading-none font-black tracking-tighter text-green-400 drop-shadow-[0_0_35px_rgba(34,197,94,0.25)]">
+                      {playingStr.note}
+                      <span className="text-3xl sm:text-4xl md:text-5xl align-top font-light text-white/35 ml-1 inline-block">
+                        {playingStr.pitch.replace(playingStr.note, "")}
+                      </span>
+                    </div>
                   </div>
-                  <div className="-mt-1 sm:-mt-3 text-lg sm:text-xl font-mono tracking-widest font-bold uppercase text-green-500">
-                    {playingStr.frequency.toFixed(2)} HZ
+
+                  {/* Frequency display row */}
+                  <div className="h-[28px] flex items-center justify-center w-full mt-2 sm:mt-4">
+                    <div className="-mt-1 sm:-mt-3 text-lg sm:text-xl font-mono tracking-widest font-bold uppercase text-green-500">
+                      {playingStr.frequency.toFixed(2)} HZ
+                    </div>
                   </div>
-                  <div className="mt-3 text-[11px] font-mono uppercase tracking-[0.2em] text-white/40 font-bold">
-                    KÜNSTLICHER BRUMMTON-REFERENZWERT
+
+                  {/* Description subtitle row */}
+                  <div className="h-[32px] flex items-center justify-center w-full mt-2 sm:mt-3">
+                    <div className="text-[11px] font-mono uppercase tracking-[0.2em] text-white/40 font-bold">
+                      KÜNSTLICHER BRUMMTON-REFERENZWERT
+                    </div>
                   </div>
                 </div>
               ) : null;
             })()
           ) : (
-            <div className="flex flex-col items-center px-4 animate-pulse">
-              <div className="text-[75px] sm:text-[110px] leading-none font-black tracking-tight text-white/30 uppercase italic">
-                ZUPF MAL AN! 🎸
+            <div className="flex flex-col items-center justify-center w-full h-full">
+              {/* Spacing empty block to match State 2 header */}
+              <div className="h-[24px] w-full mb-2 sm:mb-4" />
+
+              {/* Massive Standby Text Wrapper */}
+              <div className="h-[140px] sm:h-[210px] md:h-[260px] flex items-center justify-center relative w-full">
+                <div className="text-[55px] sm:text-[85px] md:text-[100px] leading-none font-black tracking-tight text-white/20 uppercase italic transition-all duration-300">
+                  ZUPF MAL AN! 🎸
+                </div>
               </div>
-              <div className="text-xs sm:text-sm font-mono tracking-[0.25em] text-white/40 uppercase font-semibold mt-2">
-                {isListening ? "Warte auf heftige Saiten-Vibrations..." : "Stimmgerät pennt grad"}
+
+              {/* Status Subtitle Wrapper */}
+              <div className="h-[28px] flex items-center justify-center w-full mt-2 sm:mt-4">
+                <div className="text-xs sm:text-sm font-mono tracking-[0.25em] text-white/30 uppercase font-semibold">
+                  {isListening ? "Warte auf heftige Saiten-Vibrations..." : "Stimmgerät pennt grad"}
+                </div>
               </div>
+
+              {/* Bottom empty spacing block to align vertical height exactly */}
+              <div className="h-[32px] w-full mt-2 sm:mt-3" />
             </div>
           )}
         </div>
@@ -474,10 +520,31 @@ export default function App() {
               const totalTiles = 29;
               const activeIdx = hasSignal ? Math.round(((clampedCents + 50) / 100) * (totalTiles - 1)) : -1;
 
+              // Calculate last strum afterglow index & opacity
+              let lastStrumIdx = -1;
+              let lastStrumOpacity = 0;
+              let isLastStrumInTune = false;
+
+              if (lastStrum) {
+                const elapsed = Date.now() - lastStrum.timestamp;
+                // Perfect decay: remain bright for 1 second, then fade out linearly over 3 seconds
+                lastStrumOpacity = Math.max(0, Math.min(1, 1 - (elapsed - 1000) / 3000));
+                
+                if (lastStrumOpacity > 0) {
+                  const lastClampedCents = Math.max(-50, Math.min(50, lastStrum.cents));
+                  lastStrumIdx = Math.round(((lastClampedCents + 50) / 100) * (totalTiles - 1));
+                  isLastStrumInTune = Math.abs(lastStrum.cents) <= 3;
+                }
+              }
+
               return Array.from({ length: totalTiles }).map((_, i) => {
                 const isActive = hasSignal && activeIdx === i;
                 const distance = hasSignal ? Math.abs(i - activeIdx) : -1;
                 const isNear = distance === 1;
+
+                // Is this tile illuminated by the last-strum afterglow ghost effect?
+                const isLastStrumActive = !hasSignal && lastStrumIdx === i && lastStrumOpacity > 0;
+                const isLastStrumNear = !hasSignal && Math.abs(i - lastStrumIdx) === 1 && lastStrumOpacity > 0;
 
                 // Determine base LED scale colors (dim state)
                 let baseColor = "bg-red-500/10";
@@ -507,6 +574,8 @@ export default function App() {
 
                 // Apply active glow and sizing modifications
                 let finalStyle = baseColor;
+                let inlineStyle: CSSProperties = {};
+
                 if (isActive) {
                   finalStyle = litColor;
                   heightClass = "h-[90%]"; // extend active column
@@ -519,12 +588,34 @@ export default function App() {
                   }
                   finalStyle = nearColor;
                   heightClass = "h-[70%]";
+                } else if (isLastStrumActive) {
+                  // Elegant glowing afterglow shadow representation
+                  let afterglowColor = isLastStrumInTune 
+                    ? "bg-green-400/90 shadow-[0_0_16px_rgba(34,197,94,0.8)] border border-green-300" 
+                    : "bg-red-500/90 shadow-[0_0_12px_rgba(239,68,68,0.7)] border border-red-300";
+                  if ((lastStrumIdx >= 11 && lastStrumIdx <= 12) || (lastStrumIdx >= 16 && lastStrumIdx <= 17)) {
+                    afterglowColor = "bg-yellow-400/90 shadow-[0_0_14px_rgba(234,179,8,0.7)] border border-yellow-300";
+                  }
+                  finalStyle = afterglowColor;
+                  heightClass = "h-[90%]";
+                  inlineStyle = { opacity: lastStrumOpacity };
+                } else if (isLastStrumNear) {
+                  let afterglowNearColor = isLastStrumInTune 
+                    ? "bg-green-500/40" 
+                    : "bg-red-500/40";
+                  if ((lastStrumIdx >= 11 && lastStrumIdx <= 12) || (lastStrumIdx >= 16 && lastStrumIdx <= 17)) {
+                    afterglowNearColor = "bg-yellow-500/40";
+                  }
+                  finalStyle = afterglowNearColor;
+                  heightClass = "h-[70%]";
+                  inlineStyle = { opacity: lastStrumOpacity };
                 }
 
                 return (
                   <div
                     key={i}
                     className={`flex-1 rounded-sm transition-all duration-75 ease-out ${finalStyle} ${heightClass}`}
+                    style={inlineStyle}
                   />
                 );
               });
