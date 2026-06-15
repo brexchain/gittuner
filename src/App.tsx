@@ -26,7 +26,8 @@ interface Chord {
   frets: (number | "X")[]; // string 6 down to 1 (E A D G H E)
   fingering?: (string | null)[]; // string 6 down to 1 finger markings
   barre?: { fret: number; fromStringIdx: number; toStringIdx: number };
-  tags: ("basis" | "7th" | "barre")[];
+  tags: ("basis" | "7th" | "barre" | "sus" | "dim" | "pentatonic")[];
+  multiNotes?: { stringIdx: number; frets: number[]; fingerings?: string[] }[];
 }
 
 const COMMON_CHORDS: Chord[] = [
@@ -52,6 +53,58 @@ const COMMON_CHORDS: Chord[] = [
   { name: "G7", frets: [3, 2, 0, 0, 0, 1], fingering: ["3", "2", null, null, null, "1"], tags: ["7th"] },
   { name: "E7", frets: [0, 2, 0, 1, 0, 0], fingering: [null, "2", null, "1", null, null], tags: ["7th"] },
   { name: "A7", frets: ["X", 0, 2, 0, 2, 0], fingering: [null, null, "1", null, "2", null], tags: ["7th"] },
+  // Sus-Akkorde
+  { name: "Asus4", frets: ["X", 0, 2, 2, 3, 0], fingering: [null, null, "2", "3", "4", null], tags: ["sus"] },
+  { name: "Dsus4", frets: ["X", "X", 0, 2, 3, 3], fingering: [null, null, null, "1", "3", "4"], tags: ["sus"] },
+  { name: "Esus4", frets: [0, 2, 2, 2, 0, 0], fingering: [null, "2", "3", "4", null, null], tags: ["sus"] },
+  { name: "Asus2", frets: ["X", 0, 2, 2, 0, 0], fingering: [null, null, "2", "3", null, null], tags: ["sus"] },
+  { name: "Dsus2", frets: ["X", "X", 0, 2, 3, 0], fingering: [null, null, null, "1", "3", null], tags: ["sus"] },
+  { name: "Csus2", frets: ["X", 3, 0, 0, 1, 1], fingering: [null, "3", null, null, "1", "1"], tags: ["sus"] },
+  // Dim / Verminderte
+  { name: "Adim7", frets: ["X", "X", 1, 2, 1, 2], fingering: [null, null, "1", "3", "2", "4"], tags: ["dim"] },
+  { name: "Fdim7", frets: ["X", "X", 0, 1, 0, 1], fingering: [null, null, null, "1", null, "2"], tags: ["dim"] },
+  { name: "Edim7", frets: ["X", "X", 2, 3, 2, 3], fingering: [null, null, "1", "3", "2", "4"], tags: ["dim"] },
+  { name: "Hdim", frets: ["X", 2, 3, 4, 3, "X"], fingering: [null, "1", "2", "4", "3", null], tags: ["dim"] },
+  // Pentatonik-Griffe
+  { 
+    name: "Am Pent.", 
+    frets: [5, 5, 5, 5, 5, 5], 
+    tags: ["pentatonic"],
+    multiNotes: [
+      { stringIdx: 0, frets: [5, 8], fingerings: ["1", "4"] },
+      { stringIdx: 1, frets: [5, 7], fingerings: ["1", "3"] },
+      { stringIdx: 2, frets: [5, 7], fingerings: ["1", "3"] },
+      { stringIdx: 3, frets: [5, 7], fingerings: ["1", "3"] },
+      { stringIdx: 4, frets: [5, 8], fingerings: ["1", "4"] },
+      { stringIdx: 5, frets: [5, 8], fingerings: ["1", "4"] },
+    ]
+  },
+  { 
+    name: "C Pent.", 
+    frets: [8, 8, 8, 8, 8, 8], 
+    tags: ["pentatonic"],
+    multiNotes: [
+      { stringIdx: 0, frets: [8, 10], fingerings: ["1", "3"] },
+      { stringIdx: 1, frets: [7, 10], fingerings: ["1", "4"] },
+      { stringIdx: 2, frets: [7, 10], fingerings: ["1", "4"] },
+      { stringIdx: 3, frets: [7, 9], fingerings: ["1", "3"] },
+      { stringIdx: 4, frets: [8, 10], fingerings: ["1", "3"] },
+      { stringIdx: 5, frets: [8, 10], fingerings: ["1", "3"] },
+    ]
+  },
+  { 
+    name: "G Pent.", 
+    frets: [3, 3, 3, 3, 3, 3], 
+    tags: ["pentatonic"],
+    multiNotes: [
+      { stringIdx: 0, frets: [3, 5], fingerings: ["1", "3"] },
+      { stringIdx: 1, frets: [2, 5], fingerings: ["1", "4"] },
+      { stringIdx: 2, frets: [2, 5], fingerings: ["1", "4"] },
+      { stringIdx: 3, frets: [2, 4], fingerings: ["1", "3"] },
+      { stringIdx: 4, frets: [3, 5], fingerings: ["1", "3"] },
+      { stringIdx: 5, frets: [3, 5], fingerings: ["1", "3"] },
+    ]
+  },
 ];
 
 export default function App() {
@@ -88,7 +141,7 @@ export default function App() {
   const [targetStringLock, setTargetStringLock] = useState<number | null>(null); // null = auto detect
   const [displayMode, setDisplayMode] = useState<"soundhole" | "led-bar">("soundhole");
   const [selectedChord, setSelectedChord] = useState<Chord>(COMMON_CHORDS[0]);
-  const [chordFilter, setChordFilter] = useState<"all" | "basis" | "7th" | "barre">("all");
+  const [chordFilter, setChordFilter] = useState<"all" | "basis" | "7th" | "barre" | "sus" | "dim" | "pentatonic">("all");
 
   // Interactive "afterglow" state for the last strummed note / tuning delta
   const [lastStrum, setLastStrum] = useState<{
@@ -303,36 +356,68 @@ export default function App() {
 
       const stringsCopy = [...STANDARD_GUITAR_STRINGS].reverse(); // from String 6 to 1
 
-      stringsCopy.forEach((str, index) => {
-        const fret = chord.frets[index];
-        if (fret === "X") return;
+      if (chord.multiNotes) {
+        // Play as a beautiful rising scale run!
+        let noteCounter = 0;
+        chord.multiNotes.forEach((mNotes) => {
+          const str = stringsCopy[mNotes.stringIdx];
+          mNotes.frets.forEach((fret) => {
+            const freq = str.frequency * Math.pow(2, fret / 12);
+            const staggerSeconds = 0.22 * noteCounter; // Melodic scale stagger (220ms per note)
+            const playTime = audioCtx!.currentTime + staggerSeconds;
 
-        // Calculate frequency
-        const freq = str.frequency * Math.pow(2, Number(fret) / 12);
-        const staggerSeconds = 0.055 * index; // beautiful, relaxed strum cadence
+            const osc = audioCtx!.createOscillator();
+            const gainNode = audioCtx!.createGain();
 
-        const playTime = audioCtx!.currentTime + staggerSeconds;
+            osc.type = "triangle";
+            osc.frequency.setValueAtTime(freq, playTime);
 
-        const osc = audioCtx!.createOscillator();
-        const gainNode = audioCtx!.createGain();
+            gainNode.gain.setValueAtTime(0, audioCtx!.currentTime);
+            gainNode.gain.setValueAtTime(0, playTime);
+            gainNode.gain.linearRampToValueAtTime(0.18, playTime + 0.04);
+            gainNode.gain.exponentialRampToValueAtTime(0.005, playTime + 1.2); // slightly shorter decay for fast runs
 
-        // Let's use clean "triangle" oscillators for warm resonance
-        osc.type = "triangle";
-        osc.frequency.setValueAtTime(freq, playTime);
+            osc.connect(gainNode);
+            gainNode.connect(audioCtx!.destination);
 
-        gainNode.gain.setValueAtTime(0, audioCtx!.currentTime);
-        gainNode.gain.setValueAtTime(0, playTime);
-        gainNode.gain.linearRampToValueAtTime(0.18, playTime + 0.06); // pluck onset
-        gainNode.gain.exponentialRampToValueAtTime(0.005, playTime + 2.5); // long organic acoustic sustain
+            osc.start(playTime);
+            osc.stop(playTime + 1.4);
+            noteCounter++;
+          });
+        });
+      } else {
+        // Standard chord strum
+        stringsCopy.forEach((str, index) => {
+          const fret = chord.frets[index];
+          if (fret === "X") return;
 
-        osc.connect(gainNode);
-        gainNode.connect(audioCtx!.destination);
+          // Calculate frequency
+          const freq = str.frequency * Math.pow(2, Number(fret) / 12);
+          const staggerSeconds = 0.055 * index; // beautiful, relaxed strum cadence
 
-        osc.start(playTime);
+          const playTime = audioCtx!.currentTime + staggerSeconds;
 
-        // Schedule stopping to conserve resources
-        osc.stop(playTime + 2.8);
-      });
+          const osc = audioCtx!.createOscillator();
+          const gainNode = audioCtx!.createGain();
+
+          // Let's use clean "triangle" oscillators for warm resonance
+          osc.type = "triangle";
+          osc.frequency.setValueAtTime(freq, playTime);
+
+          gainNode.gain.setValueAtTime(0, audioCtx!.currentTime);
+          gainNode.gain.setValueAtTime(0, playTime);
+          gainNode.gain.linearRampToValueAtTime(0.18, playTime + 0.06); // pluck onset
+          gainNode.gain.exponentialRampToValueAtTime(0.005, playTime + 2.5); // long organic acoustic sustain
+
+          osc.connect(gainNode);
+          gainNode.connect(audioCtx!.destination);
+
+          osc.start(playTime);
+
+          // Schedule stopping to conserve resources
+          osc.stop(playTime + 2.8);
+        });
+      }
     } catch (err) {
       console.error("Failed to synthesize strum:", err);
     }
@@ -535,9 +620,19 @@ export default function App() {
   const needlePercentage = ((clampedCents + 50) / 100) * 100;
 
   // Chord starting fret and category filtering calculations
-  const fretsAsNumbers = selectedChord.frets.filter((f): f is number => typeof f === "number" && f > 0);
-  const maxFret = fretsAsNumbers.length > 0 ? Math.max(...fretsAsNumbers) : 0;
-  const startFret = maxFret > 5 ? Math.min(...fretsAsNumbers) : 1;
+  const allFretsList: number[] = [];
+  selectedChord.frets.forEach((f) => {
+    if (typeof f === "number" && f > 0) allFretsList.push(f);
+  });
+  if (selectedChord.multiNotes) {
+    selectedChord.multiNotes.forEach((m) => {
+      m.frets.forEach((f) => {
+        if (f > 0) allFretsList.push(f);
+      });
+    });
+  }
+  const maxFret = allFretsList.length > 0 ? Math.max(...allFretsList) : 0;
+  const startFret = maxFret > 5 ? Math.min(...allFretsList) : 1;
   const showNut = startFret === 1;
   const filteredChords = chordFilter === "all" 
     ? COMMON_CHORDS 
@@ -741,6 +836,153 @@ export default function App() {
             animation: vibrateStringAnimation 0.08s infinite linear;
           }
         `}</style>
+
+        {/* Elegant Vertical Acoustic Guitar Body Underlay */}
+        <div className="absolute inset-0 z-0 pointer-events-none flex items-center justify-center overflow-visible">
+          <svg 
+            viewBox="0 0 600 850" 
+            className="w-[720px] sm:w-[940px] md:w-[1080px] h-auto max-w-[170vw] opacity-80 select-none animate-fade-in transition-all duration-300"
+            preserveAspectRatio="xMidYMid meet"
+          >
+            <defs>
+              {/* Sunburst Gradient */}
+              <radialGradient id="guitar-sunburst" cx="300" cy="425" r="300" fx="300" fy="425" gradientUnits="userSpaceOnUse">
+                <stop offset="0%" stopColor="#ffb300" stopOpacity="0.85" />
+                <stop offset="30%" stopColor="#f57c00" stopOpacity="0.8" />
+                <stop offset="55%" stopColor="#d84315" stopOpacity="0.7" />
+                <stop offset="82%" stopColor="#3e2723" stopOpacity="0.9" />
+                <stop offset="100%" stopColor="#0d0d0d" stopOpacity="0.95" />
+              </radialGradient>
+
+              {/* Fingerboard Texture */}
+              <linearGradient id="fingerboard-grad" x1="0%" y1="0%" x2="100%" y2="0%">
+                <stop offset="0%" stopColor="#1a120b" />
+                <stop offset="50%" stopColor="#2e2114" />
+                <stop offset="100%" stopColor="#1a120b" />
+              </linearGradient>
+
+              {/* Pickguard/Schlagschutz Shape Gradient */}
+              <linearGradient id="pickguard-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop offset="0%" stopColor="#2b0e02" />
+                <stop offset="100%" stopColor="#080301" />
+              </linearGradient>
+
+              {/* Bridge Wood Gradient */}
+              <linearGradient id="bridge-wood" x1="0%" y1="0%" x2="0%" y2="100%">
+                <stop offset="0%" stopColor="#3E2723" />
+                <stop offset="100%" stopColor="#1A0C06" />
+              </linearGradient>
+            </defs>
+
+            {/* Fretboard & Neck (standing vertically up) */}
+            <rect x="272" y="0" width="56" height="282" fill="url(#fingerboard-grad)" rx="1" />
+            
+            {/* Silver NICKEL frets on neck */}
+            {Array.from({ length: 14 }).map((_, i) => {
+              const fretY = 282 - (i * 18);
+              return (
+                <g key={i}>
+                  <line x1="272" y1={fretY} x2="328" y2={fretY} stroke="#8a8a8a" strokeWidth="1" opacity="0.5" />
+                  {/* Pearl Dot Inlays on fret 3, 5, 7, 9, 12 */}
+                  {[3, 5, 7, 9].includes(i + 1) && (
+                    <circle cx="300" cy={fretY - 9} r="2.5" fill="#eaeaea" opacity="0.8" />
+                  )}
+                  {i + 1 === 12 && (
+                    <>
+                      <circle cx="293" cy={fretY - 9} r="2" fill="#eaeaea" opacity="0.8" />
+                      <circle cx="307" cy={fretY - 9} r="2" fill="#eaeaea" opacity="0.8" />
+                    </>
+                  )}
+                </g>
+              );
+            })}
+
+            {/* Wood Grain Sunburst Guitar Front Face Plate */}
+            <path 
+              d="M 300 280 
+                 C 245 280, 160 286, 142 360 
+                 C 125 430, 175 480, 195 505 
+                 C 165 545, 85 600, 85 695 
+                 C 85 795, 175 850, 300 850 
+                 C 425 850, 515 795, 515 695 
+                 C 515 600, 435 545, 405 505 
+                 C 425 480, 475 430, 458 360 
+                 C 440 286, 355 280, 300 280 Z" 
+              fill="url(#guitar-sunburst)"
+              stroke="#432111"
+              strokeWidth="8"
+              className="drop-shadow-[0_15px_30px_rgba(0,0,0,0.9)]"
+            />
+
+            {/* Outer binding decoration */}
+            <path 
+              d="M 300 283 
+                 C 246 283, 162 289, 145 361 
+                 C 128 431, 176 481, 196 506 
+                 C 166 546, 88 601, 88 696 
+                 C 88 792, 177 847, 300 847 
+                 C 423 847, 512 792, 512 696 
+                 C 512 601, 434 546, 404 506 
+                 C 424 501, 472 481, 455 361 
+                 C 438 289, 354 283, 300 283 Z" 
+              fill="none"
+              stroke="#fffef2"
+              strokeWidth="1.5"
+              opacity="0.2"
+            />
+
+            {/* Classic Tortoiseshell Custom Pickguard */}
+            <path
+              d="M 300 425
+                 A 75 75 0 0 1 353 478
+                 L 395 478
+                 C 415 478, 440 520, 420 550
+                 C 400 580, 335 520, 320 495
+                 Z"
+              fill="url(#pickguard-grad)"
+              opacity="0.75"
+              className="drop-shadow-[0_2px_4px_rgba(0,0,0,0.45)]"
+            />
+
+            {/* Wooden Soundhole Outer Rosette Binding (underlays actual rosette interface card) */}
+            <circle cx="300" cy="425" r="77" fill="none" stroke="#2B1408" strokeWidth="6" opacity="0.6" />
+            <circle cx="300" cy="425" r="75" fill="none" stroke="#ffb300" strokeWidth="2" opacity="0.4" />
+            <circle cx="300" cy="425" r="69" fill="#000000" opacity="0.1" />
+
+            {/* Rosewood Bridge on lower bout */}
+            <g transform="translate(0, 390)" className="drop-shadow-[0_4px_10px_rgba(0,0,0,0.7)]">
+              {/* Bridge body wings */}
+              <path 
+                d="M 190 318
+                   C 220 316, 225 310, 245 310
+                   L 355 310
+                   C 375 310, 380 316, 410 318
+                   C 420 322, 420 326, 410 329
+                   C 380 331, 375 328, 355 328
+                   L 245 328
+                   C 225 328, 220 331, 190 329
+                   C 180 326, 180 322, 190 318 Z" 
+                fill="url(#bridge-wood)"
+                stroke="#150a04"
+                strokeWidth="1.5"
+              />
+              
+              {/* Bone saddle */}
+              <rect x="238" y="316" width="124" height="3" fill="#faf9f2" rx="0.5" className="drop-shadow-[0_1px_1px_rgba(0,0,0,0.3)]" />
+              
+              {/* Pin slots with dot details */}
+              {Array.from({ length: 6 }).map((_, idx) => {
+                const pinX = 250 + idx * 20;
+                return (
+                  <g key={idx}>
+                    <circle cx={pinX} cy="323" r="3" fill="#1b120f" stroke="#0e0806" strokeWidth="0.5" />
+                    <circle cx={pinX} cy="323" r="1" fill="#ffffff" opacity="0.85" />
+                  </g>
+                );
+              })}
+            </g>
+          </svg>
+        </div>
         
         {/* Centered Pitch Indicator Line (Static Backdrop Overlay only for standard display) */}
         {displayMode === "led-bar" && (
@@ -787,7 +1029,7 @@ export default function App() {
           /* ==================== ACOUSTIC SOUNDHOLE CALIBRATOR ==================== */
           <div className="relative z-10 flex flex-col items-center justify-center w-full my-auto">
             {/* The Rosette Body container */}
-            <div className="relative w-64 h-64 sm:w-[290px] sm:h-[290px] md:w-[325px] md:h-[325px] rounded-full p-[10px] bg-gradient-to-br from-[#8C5230] via-[#5C3218] to-[#2B1408] shadow-[0_20px_50px_rgba(0,0,0,0.85),inset_0_2px_12px_rgba(255,255,255,0.15)] border border-[#8C5230]/40 flex items-center justify-center select-none transition-all">
+            <div className="relative z-10 w-64 h-64 sm:w-[290px] sm:h-[290px] md:w-[325px] md:h-[325px] rounded-full p-[10px] bg-gradient-to-br from-[#8C5230] via-[#5C3218] to-[#2B1408] shadow-[0_20px_50px_rgba(0,0,0,0.85),inset_0_2px_12px_rgba(255,255,255,0.15)] border border-[#8C5230]/40 flex items-center justify-center select-none transition-all">
               
               {/* Wooden Inlaid Concentric Rosette Rings */}
               <div className="absolute inset-4 rounded-full border-4 border-double border-yellow-600/35 pointer-events-none" />
@@ -1186,9 +1428,12 @@ export default function App() {
               <div className="flex flex-wrap gap-1 bg-black/40 p-1 rounded-lg border border-white/5 mb-3">
                 {[
                   { id: "all", label: "Alle" },
-                  { id: "basis", label: "Grundakkorde" },
-                  { id: "7th", label: "7er Akkorde" },
-                  { id: "barre", label: "Barré-Griffe" }
+                  { id: "basis", label: "Grund" },
+                  { id: "7th", label: "7er" },
+                  { id: "barre", label: "Barré" },
+                  { id: "sus", label: "Sus-Akkorde" },
+                  { id: "dim", label: "Dim / Verm." },
+                  { id: "pentatonic", label: "Pentatonik (Scale)" }
                 ].map((tab) => (
                   <button
                     key={tab.id}
@@ -1231,12 +1476,19 @@ export default function App() {
             
             <div className="mt-4 flex flex-wrap gap-2 text-[10px] items-center text-white/35 font-mono">
               <span className="font-bold uppercase tracking-wider text-white/50">Details:</span>
-              <span>Saiten (von links nach rechts):</span>
+              <span>{selectedChord.multiNotes ? "Tonleiter Töne (Saiten frets):" : "Saiten (von links nach rechts):"}</span>
               <span className="bg-white/5 px-2 py-0.5 rounded text-white/60 border border-white/10">
-                {selectedChord.frets.map((f, i) => {
-                  const stringLabels = ["E/6", "A/5", "D/4", "G/3", "H/2", "E/1"];
-                  return `${stringLabels[i]}:${f}`;
-                }).join(" | ")}
+                {selectedChord.multiNotes ? (
+                  selectedChord.multiNotes.map((m) => {
+                    const stringLabels = ["E/6", "A/5", "D/4", "G/3", "H/2", "E/1"];
+                    return `${stringLabels[m.stringIdx]}:${m.frets.join(",")}`;
+                  }).join(" | ")
+                ) : (
+                  selectedChord.frets.map((f, i) => {
+                    const stringLabels = ["E/6", "A/5", "D/4", "G/3", "H/2", "E/1"];
+                    return `${stringLabels[i]}:${f}`;
+                  }).join(" | ")
+                )}
               </span>
             </div>
           </div>
@@ -1341,66 +1593,100 @@ export default function App() {
                 );
               })()}
 
-              {/* Open, Pressed or Muted Indicators */}
-              {selectedChord.frets.map((fret, i) => {
-                const xPos = 20 + i * 20;
+               {/* Open, Pressed or Muted Indicators */}
+              {selectedChord.multiNotes ? (
+                selectedChord.multiNotes.flatMap((mNotes) => {
+                  const stringIdx = mNotes.stringIdx;
+                  const xPos = 20 + stringIdx * 20;
 
-                // Case 1: Muted string 'X'
-                if (fret === "X") {
+                  return mNotes.frets.map((fret, noteIdx) => {
+                    const relativeFret = fret - startFret + 1;
+                    const yPos = 25 + (relativeFret - 0.5) * 20;
+                    const fingeringNum = mNotes.fingerings?.[noteIdx] || null;
+
+                    return (
+                      <g key={`scale-${stringIdx}-${fret}`}>
+                        <circle
+                          cx={xPos}
+                          cy={yPos}
+                          r="6.5"
+                          className="fill-amber-500 stroke-white/20 stroke-[1]"
+                        />
+                        {fingeringNum && (
+                          <text
+                            x={xPos}
+                            y={yPos + 2.5}
+                            textAnchor="middle"
+                            className="font-sans text-[8px] font-black fill-black"
+                          >
+                            {fingeringNum}
+                          </text>
+                        )}
+                      </g>
+                    );
+                  });
+                })
+              ) : (
+                selectedChord.frets.map((fret, i) => {
+                  const xPos = 20 + i * 20;
+
+                  // Case 1: Muted string 'X'
+                  if (fret === "X") {
+                    return (
+                      <g key={`muted-${i}`}>
+                        <line x1={xPos - 3} y1={15} x2={xPos + 3} y2={21} className="stroke-red-500/80 stroke-2" />
+                        <line x1={xPos + 3} y1={15} x2={xPos - 3} y2={21} className="stroke-red-500/80 stroke-2" />
+                      </g>
+                    );
+                  }
+
+                  // Case 2: Open string '0' (draw a small circle at the top)
+                  if (fret === 0) {
+                    return (
+                      <circle
+                        key={`open-${i}`}
+                        cx={xPos}
+                        cy={18}
+                        r="3.5"
+                        className="fill-none stroke-green-400 stroke-[1.5]"
+                      />
+                    );
+                  }
+
+                  // Case 3: Fingering/pressed fret (with starting fret calculation offsets)
+                  const relativeFret = Number(fret) - startFret + 1;
+                  const yPos = 25 + (relativeFret - 0.5) * 20;
+                  const fingeringNum = selectedChord.fingering?.[i] || null;
+
+                  // If is part of a barre chord and is on the barre fret, we can draw a ring highlights, or skip background as it already has rect
+                  const isPartOfBarreFret = selectedChord.barre && 
+                    fret === selectedChord.barre.fret && 
+                    i >= selectedChord.barre.fromStringIdx && 
+                    i <= selectedChord.barre.toStringIdx;
+
                   return (
-                    <g key={`muted-${i}`}>
-                      <line x1={xPos - 3} y1={15} x2={xPos + 3} y2={21} className="stroke-red-500/80 stroke-2" />
-                      <line x1={xPos + 3} y1={15} x2={xPos - 3} y2={21} className="stroke-red-500/80 stroke-2" />
+                    <g key={`pressed-${i}`}>
+                      {/* Circle backing (only needed if not drawn as a solid rectangle, or to give solid look for text overlay) */}
+                      <circle
+                        cx={xPos}
+                        cy={yPos}
+                        r="6.5"
+                        className={`${isPartOfBarreFret ? "fill-amber-400 stroke-zinc-900 stroke-[1]" : "fill-amber-500 stroke-white/20 stroke-[1]"}`}
+                      />
+                      {fingeringNum && (
+                        <text
+                          x={xPos}
+                          y={yPos + 2.5}
+                          textAnchor="middle"
+                          className="font-sans text-[8px] font-black fill-black"
+                        >
+                          {fingeringNum}
+                        </text>
+                      )}
                     </g>
                   );
-                }
-
-                // Case 2: Open string '0' (draw a small circle at the top)
-                if (fret === 0) {
-                  return (
-                    <circle
-                      key={`open-${i}`}
-                      cx={xPos}
-                      cy={18}
-                      r="3.5"
-                      className="fill-none stroke-green-400 stroke-[1.5]"
-                    />
-                  );
-                }
-
-                // Case 3: Fingering/pressed fret (with starting fret calculation offsets)
-                const relativeFret = Number(fret) - startFret + 1;
-                const yPos = 25 + (relativeFret - 0.5) * 20;
-                const fingeringNum = selectedChord.fingering?.[i] || null;
-
-                // If is part of a barre chord and is on the barre fret, we can draw a ring highlights, or skip background as it already has rect
-                const isPartOfBarreFret = selectedChord.barre && 
-                  fret === selectedChord.barre.fret && 
-                  i >= selectedChord.barre.fromStringIdx && 
-                  i <= selectedChord.barre.toStringIdx;
-
-                return (
-                  <g key={`pressed-${i}`}>
-                    {/* Circle backing (only needed if not drawn as a solid rectangle, or to give solid look for text overlay) */}
-                    <circle
-                      cx={xPos}
-                      cy={yPos}
-                      r="6.5"
-                      className={`${isPartOfBarreFret ? "fill-amber-400 stroke-zinc-900 stroke-[1]" : "fill-amber-500 stroke-white/20 stroke-[1]"}`}
-                    />
-                    {fingeringNum && (
-                      <text
-                        x={xPos}
-                        y={yPos + 2.5}
-                        textAnchor="middle"
-                        className="font-sans text-[8px] font-black fill-black"
-                      >
-                        {fingeringNum}
-                      </text>
-                    )}
-                  </g>
-                );
-              })}
+                })
+              )}
             </svg>
           </div>
         </div>
