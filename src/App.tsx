@@ -113,6 +113,97 @@ export default function App() {
   const playTimeoutRef = useRef<number | null>(null);
   const [playingStringNum, setPlayingStringNum] = useState<number | null>(null);
 
+  // Mobile screensaver / sleep-timer state (configured to exactly 99 seconds)
+  const [isDimmed, setIsDimmed] = useState<boolean>(false);
+  const wakeLockRef = useRef<any>(null);
+  const lastActiveRef2 = useRef<number>(Date.now());
+
+  // Request Wake Lock to keep screen awake on mobile device
+  const requestWakeLock = async () => {
+    if ('wakeLock' in navigator) {
+      try {
+        wakeLockRef.current = await (navigator as any).wakeLock.request('screen');
+      } catch (err) {
+        // Ignored safe fallback
+      }
+    }
+  };
+
+  // Releasable reference to Wake Lock
+  const releaseWakeLock = async () => {
+    if (wakeLockRef.current) {
+      try {
+        await wakeLockRef.current.release();
+        wakeLockRef.current = null;
+      } catch (err) {}
+    }
+  };
+
+  // Resets the inactivity countdown timer
+  const resetInactivityTimer = () => {
+    lastActiveRef2.current = Date.now();
+    if (isDimmed) {
+      setIsDimmed(false);
+      requestWakeLock();
+    }
+  };
+
+  // Automatically reset the idle state whenever active guitar signal is detected
+  useEffect(() => {
+    if (tuningData.hasSignal) {
+      lastActiveRef2.current = Date.now();
+      if (isDimmed) {
+        setIsDimmed(false);
+        requestWakeLock();
+      }
+    }
+  }, [tuningData.hasSignal, isDimmed]);
+
+  // Combined master interval checking for 99s sleep/dim behavior + Wake Lock binders
+  useEffect(() => {
+    requestWakeLock();
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        requestWakeLock();
+        lastActiveRef2.current = Date.now();
+      } else {
+        releaseWakeLock();
+      }
+    };
+
+    const handleInteraction = () => {
+      resetInactivityTimer();
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    document.addEventListener('click', handleInteraction);
+    document.addEventListener('touchstart', handleInteraction, { passive: true });
+    document.addEventListener('mousemove', handleInteraction, { passive: true });
+    document.addEventListener('keydown', handleInteraction);
+
+    // Track active/inactive elapsed time in milliseconds (99 seconds limit)
+    const checkInterval = setInterval(() => {
+      const elapsed = Date.now() - lastActiveRef2.current;
+      if (elapsed >= 99000) {
+        if (!isDimmed) {
+          setIsDimmed(true);
+          releaseWakeLock();
+        }
+      }
+    }, 1000);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      document.removeEventListener('click', handleInteraction);
+      document.removeEventListener('touchstart', handleInteraction);
+      document.removeEventListener('mousemove', handleInteraction);
+      document.removeEventListener('keydown', handleInteraction);
+      clearInterval(checkInterval);
+      releaseWakeLock();
+    };
+  }, [isDimmed]);
+
   const stopReferencePitch = () => {
     if (playTimeoutRef.current) {
       clearTimeout(playTimeoutRef.current);
@@ -1467,6 +1558,34 @@ export default function App() {
             <div className="mt-5 text-[9px] uppercase tracking-widest text-[#F5F5F5]/30 font-mono">
               Datenschutz ist Ehrensache • Kein Spionage-Server lauscht mit
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Elegantly Polished Custom Screensaver Overlay (99s Inactivity) */}
+      {isDimmed && (
+        <div 
+          id="app-screensaver-overlay" 
+          onClick={resetInactivityTimer}
+          onTouchStart={resetInactivityTimer}
+          className="fixed inset-0 bg-black/95 backdrop-blur-md flex flex-col items-center justify-center z-[100] cursor-pointer animate-fade-in select-none"
+        >
+          <div className="text-center p-6 max-w-sm flex flex-col items-center">
+            {/* Pulsating Ambient Tuner Icon */}
+            <div className="w-16 h-16 bg-amber-500/10 border border-amber-500/30 rounded-full flex items-center justify-center mb-6 animate-pulse text-amber-400">
+              <Zap size={28} />
+            </div>
+            
+            <h2 className="text-xl font-bold text-white mb-2 tracking-tight uppercase italic">
+              Bildschirmschoner aktiv 💤
+            </h2>
+            <p className="text-white/40 text-xs mb-8 leading-relaxed font-mono">
+              (Inaktivität von 99 Sekunden überschritten)
+            </p>
+            
+            <span className="px-5 py-2.5 bg-amber-500 text-black font-extrabold uppercase text-xs tracking-widest rounded-full shadow-lg shadow-amber-950/40 hover:bg-amber-400 transition-all">
+              Tippen zum Fortfahren 🎸
+            </span>
           </div>
         </div>
       )}
