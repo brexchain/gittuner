@@ -66,6 +66,7 @@ export default function App() {
   const [permissionState, setPermissionState] = useState<"not-requested" | "granted" | "denied">("not-requested");
   const [isListening, setIsListening] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string>("");
+  const [bypassPermissionOverlay, setBypassPermissionOverlay] = useState<boolean>(false);
 
   // Live tuning state (throttled/smoothed)
   const [tuningData, setTuningData] = useState<{
@@ -248,7 +249,7 @@ export default function App() {
 
   // Request microphone on component mount automatically (user request)
   useEffect(() => {
-    startTuningEngine();
+    startTuningEngine("auto");
     return () => {
       stopTuningEngine();
       stopReferencePitch();
@@ -278,13 +279,17 @@ export default function App() {
   };
 
   // Start the Audio API and detect pitches
-  const startTuningEngine = async () => {
+  const startTuningEngine = async (triggerType: "auto" | "manual" | any = "manual") => {
     // Reset state first
     setErrorMsg("");
     stopTuningEngine();
 
     try {
       // 1. Get user media stream
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        throw new Error("Dein Browser unterstützt keinen Mikrofonzugriff in diesem Kontext (z. B. wegen Sicherheits-Einschränkungen im iFrame). Du kannst die App trotzdem im manuellen Modus nutzen!");
+      }
+
       // We disable autoGainControl, noiseSuppression, and echoCancellation for instruments.
       // Filtering algorithms designed for speech completely mangle the raw harmonic contents
       // of string strikes. Disabling them is essential for pro accuracy.
@@ -299,6 +304,7 @@ export default function App() {
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
       streamRef.current = stream;
       setPermissionState("granted");
+      setBypassPermissionOverlay(false);
 
       // 2. Initialize Web Audio Context
       const AudioCtxClass = window.AudioContext || (window as any).webkitAudioContext;
@@ -412,9 +418,21 @@ export default function App() {
       animationFrameRef.current = requestAnimationFrame(processTick);
 
     } catch (err: any) {
-      console.error("Microphone access denied or audio issue", err);
+      console.warn("Microphone access denied or audio issue", err);
       setPermissionState("denied");
-      setErrorMsg("Lausch-Erlaubnis verweigert! Bitte gib uns das Mikrofon im Browser frei, sonst können wir deine Saiten-Vibrationen nicht erschnüffeln.");
+      
+      let friendlyError = "Lausch-Erlaubnis verweigert! Bitte gib uns das Mikrofon im Browser frei, sonst können wir deine Saiten-Vibrationen nicht erschnüffeln.";
+      if (err.name === "NotAllowedError" || err.name === "PermissionDeniedError" || err.message?.toLowerCase().includes("denied")) {
+        friendlyError = "Mikrofonzugriff blockiert! Bitte aktiviere den Zugriff in deinen Browsereinstellungen für diese Website, um das Stimmgerät voll zu nutzen. Oder wechsle in den unten angebotenen manuellen Modus.";
+      } else if (err.message) {
+        friendlyError = err.message;
+      }
+      
+      setErrorMsg(friendlyError);
+
+      // Always automatically bypass the fullscreen blocker overlay on any error/denial,
+      // so the user can immediately use manual mode, reference string generator, and chord library!
+      setBypassPermissionOverlay(true);
     }
   };
 
@@ -560,6 +578,26 @@ export default function App() {
   return (
     <div className="min-h-screen bg-[#0A0A0A] text-[#F5F5F5] flex flex-col justify-between font-sans transition-colors duration-300 relative overflow-hidden select-none">
       
+      {bypassPermissionOverlay && permissionState !== "granted" && (
+        <div id="manual-mode-banner" className="bg-amber-950/30 border-b border-amber-500/20 px-6 sm:px-10 py-3 text-[11px] sm:text-xs text-amber-300 font-mono flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 animate-fade-in z-20">
+          <div className="flex items-center gap-2">
+            <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse shrink-0" />
+            <span>
+              <strong>Manueller Referenz-Modus:</strong> Stimmgerät lauscht gerade nicht (Blockiert oder Stumm). Benutze die Saiten unten oder die Akkord-Bibliothek zum Stimmen!
+            </span>
+          </div>
+          <button
+            onClick={() => {
+              setBypassPermissionOverlay(false);
+              startTuningEngine();
+            }}
+            className="px-3 py-1 bg-amber-500 text-black font-extrabold uppercase rounded text-[9px] hover:bg-amber-400 active:scale-95 transition-all cursor-pointer self-end sm:self-auto"
+          >
+            Mikrofon aktivieren 🎤
+          </button>
+        </div>
+      )}
+
       {/* Design Header: Status Bar Layout */}
       <header className="flex justify-between items-center px-6 sm:px-10 py-6 sm:py-8 border-b border-white/10 relative z-10 bg-[#0A0A0A]">
         {/* Device Status Segment */}
@@ -759,8 +797,8 @@ export default function App() {
                 {/* SVG Overlay: Curved Calibration Grid & Swing Needle Pointer */}
                 <svg viewBox="0 0 240 240" className="absolute inset-0 w-full h-full pointer-events-none z-30">
                   {/* Anchor/Pivot points cap near the lower quadrant */}
-                  <circle cx="120" cy="180" r="10" className="fill-[#1F1916] stroke-amber-600/70 stroke-2" />
-                  <circle cx="120" cy="180" r="4.5" className="fill-amber-500" />
+                  <circle cx="120" cy="180" r="13" className="fill-[#1A1513] stroke-amber-600/80 stroke-2" />
+                  <circle cx="120" cy="180" r="5.5" className="fill-amber-500" />
 
                   {/* Tick Gauge Elements */}
                   {(() => {
@@ -774,29 +812,37 @@ export default function App() {
                       const x1 = 120 + 122 * Math.cos(angleRad);
                       const y1 = 180 - 122 * Math.sin(angleRad);
                       
-                      // Inner radius 111 for major ticks, 116 for minor ticks
+                      // Inner radius: Much longer ticks for high visibility
+                      const isCenter = c === 0;
                       const isMajor = c % 10 === 0;
-                      const innerRadius = isMajor ? 111 : 116;
+                      
+                      // Center tick is 20px long, major is 15px, minor is 10px
+                      const innerRadius = isCenter ? 102 : (isMajor ? 107 : 112);
                       const x2 = 120 + innerRadius * Math.cos(angleRad);
                       const y2 = 180 - innerRadius * Math.sin(angleRad);
                       
-                      // Color categorization
-                      let tickColorClass = "stroke-red-500/30";
-                      if (Math.abs(c) <= 3) {
-                        tickColorClass = "stroke-green-400 stroke-[2.2px] opacity-60";
+                      // Thickness & default opacities scaled up for much clearer presence (Griffs / Balken)
+                      let strokeWidthClass = isCenter ? "stroke-[4px]" : (isMajor ? "stroke-[3px]" : "stroke-[2.2px]");
+                      
+                      // Color categorization - highly visible default colors
+                      let tickColorClass = `stroke-red-500/50 ${strokeWidthClass}`;
+                      if (isCenter) {
+                        tickColorClass = `stroke-green-400 stroke-[4.5px] opacity-80`;
+                      } else if (Math.abs(c) <= 3) {
+                        tickColorClass = `stroke-green-400/70 ${strokeWidthClass}`;
                       } else if (Math.abs(c) <= 15) {
-                        tickColorClass = "stroke-yellow-500/25";
+                        tickColorClass = `stroke-yellow-400/60 ${strokeWidthClass}`;
                       }
                       
-                      // Highlight active tick if needle is close
+                      // Highlight active tick if needle is close - super ultra thick glow
                       const isLit = hasSignal && Math.abs(clampedCents - c) <= 2.5;
                       if (isLit) {
                         if (Math.abs(c) <= 3) {
-                          tickColorClass = "stroke-green-400 stroke-[3.5px] drop-shadow-[0_0_10px_#22c55e]";
+                          tickColorClass = "stroke-green-400 stroke-[5.5px] drop-shadow-[0_0_12px_#22c55e]";
                         } else if (Math.abs(c) <= 15) {
-                          tickColorClass = "stroke-yellow-400 stroke-[3px] drop-shadow-[0_0_8px_#eab308]";
+                          tickColorClass = "stroke-yellow-400 stroke-[5px] drop-shadow-[0_0_10px_#eab308]";
                         } else {
-                          tickColorClass = "stroke-red-500 stroke-[3px] drop-shadow-[0_0_8px_#ef4444]";
+                          tickColorClass = "stroke-red-500 stroke-[5px] drop-shadow-[0_0_10px_#ef4444]";
                         }
                       }
                       
@@ -817,10 +863,14 @@ export default function App() {
                   {/* Glowing perfect target line in center */}
                   <line 
                     x1="120" 
-                    y1="50" 
+                    y1="46" 
                     x2="120" 
-                    y2="62" 
-                    className={`stroke-2 transition-all duration-300 ${hasSignal && isInTune ? "stroke-green-400 stroke-[3px] drop-shadow-[0_0_8px_#22c55e]" : "stroke-white/20"}`} 
+                    y2="66" 
+                    className={`transition-all duration-300 ${
+                      hasSignal && isInTune 
+                        ? "stroke-green-400 stroke-[5px] drop-shadow-[0_0_12px_#22c55e]" 
+                        : "stroke-white/40 stroke-[2.5px]"
+                    }`} 
                   />
 
                   {/* Sweep-Hand Needle Pointer */}
@@ -832,39 +882,62 @@ export default function App() {
                     const targetY = 180 - len * Math.sin(angleRad);
 
                     let needleColor = "stroke-amber-400";
-                    let glowFilter = "drop-shadow(0 0 4px rgba(245,158,11,0.5))";
+                    let glowFilter = "drop-shadow(0 0 6px rgba(245,158,11,0.65))";
+                    let beadColor = "#f59e0b";
 
                     if (hasSignal) {
                       if (isInTune) {
                         needleColor = "stroke-green-400";
-                        glowFilter = "drop-shadow(0 0 12px #22c55e)";
+                        glowFilter = "drop-shadow(0 0 15px #22c55e) drop-shadow(0 0 5px #22c55e)";
+                        beadColor = "#22c55e";
                       } else if (Math.abs(centsDiff) <= 15) {
                         needleColor = "stroke-yellow-400";
-                        glowFilter = "drop-shadow(0 0 8px #eab308)";
+                        glowFilter = "drop-shadow(0 0 12px #eab308) drop-shadow(0 0 4px #eab308)";
+                        beadColor = "#eab308";
                       } else {
                         needleColor = "stroke-red-500";
-                        glowFilter = "drop-shadow(0 0 8px #ef4444)";
+                        glowFilter = "drop-shadow(0 0 12px #ef4444) drop-shadow(0 0 4px #ef4444)";
+                        beadColor = "#ef4444";
                       }
                     } else {
-                      // Quiet states
-                      needleColor = "stroke-white/15";
-                      glowFilter = "none";
+                      // Quiet state: needle is much more clear/visible (opaque and styled with a crisp color)
+                      needleColor = "stroke-white/35";
+                      glowFilter = "drop-shadow(0 2px 4px rgba(0,0,0,0.5))";
+                      beadColor = "rgba(255,255,255,0.45)";
                     }
 
                     return (
                       <g style={{ filter: glowFilter }} className="transition-all duration-150 ease-out">
-                        {/* Needle line body */}
+                        {/* Needle line body - Upgraded to stroke-[6px] for bold presence */}
                         <line 
                           x1="120" 
                           y1="180" 
                           x2={targetX} 
                           y2={targetY} 
-                          className="stroke-[3.5px] rounded-full transition-all duration-100 ease-out"
+                          className="stroke-[6px] rounded-full transition-all duration-100 ease-out"
                           stroke={needleColor}
                           strokeLinecap="round"
                         />
-                        {/* Needle head bead */}
-                        <circle cx={targetX} cy={targetY} r="3" fill={isInTune ? "#22c55e" : hasSignal ? (Math.abs(centsDiff) <= 15 ? "#eab308" : "#ef4444") : "rgba(255,255,255,0.25)"} />
+                        
+                        {/* Highlights core overlay for realistic gloss */}
+                        <line 
+                          x1="120" 
+                          y1="180" 
+                          x2={targetX} 
+                          y2={targetY} 
+                          className="stroke-[1.5px] opacity-80 transition-all duration-100 ease-out"
+                          stroke="#ffffff"
+                          strokeLinecap="round"
+                        />
+
+                        {/* Large glowing needle head bubble bead */}
+                        <circle 
+                          cx={targetX} 
+                          cy={targetY} 
+                          r="6.5" 
+                          fill={beadColor} 
+                          className="stroke-white/35 stroke-[1px] transition-all duration-150"
+                        />
                       </g>
                     );
                   })()}
@@ -1345,7 +1418,7 @@ export default function App() {
       </section>
 
       {/* Gorgeous Privacy and Device Permissions Overlay if loading or denied */}
-      {permissionState !== "granted" && (
+      {permissionState !== "granted" && !bypassPermissionOverlay && (
         <div id="mic-fallback-overlay" className="absolute inset-0 bg-black/85 backdrop-blur-md flex items-center justify-center z-50 p-6">
           <div className="bg-[#141414] border border-white/10 p-8 sm:p-12 rounded-3xl max-w-md text-center shadow-2xl relative">
             
@@ -1373,13 +1446,23 @@ export default function App() {
               </p>
             ) : null}
 
-            <button 
-              id="grant-mic-permission-action"
-              onClick={startTuningEngine}
-              className="w-full py-3.5 sm:py-4 bg-white text-black font-bold text-xs sm:text-sm tracking-widest uppercase rounded-full hover:bg-gray-100 active:scale-[0.98] transition-all cursor-pointer shadow-md"
-            >
-              Lauscher anknipsen! 🔥
-            </button>
+            <div className="flex flex-col gap-3">
+              <button 
+                id="grant-mic-permission-action"
+                onClick={startTuningEngine}
+                className="w-full py-3.5 bg-white text-black font-bold text-xs sm:text-sm tracking-widest uppercase rounded-full hover:bg-gray-100 active:scale-[0.98] transition-all cursor-pointer shadow-md"
+              >
+                Lauscher anknipsen! 🔥
+              </button>
+
+              <button 
+                id="bypass-mic-permission-action"
+                onClick={() => setBypassPermissionOverlay(true)}
+                className="w-full py-3 bg-white/5 text-white/80 font-bold text-xs tracking-widest uppercase rounded-full border border-white/15 hover:bg-white/10 active:scale-[0.98] transition-all cursor-pointer shadow-sm"
+              >
+                Manueller Modus & Akkorde 🎸
+              </button>
+            </div>
 
             <div className="mt-5 text-[9px] uppercase tracking-widest text-[#F5F5F5]/30 font-mono">
               Datenschutz ist Ehrensache • Kein Spionage-Server lauscht mit
