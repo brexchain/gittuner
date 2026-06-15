@@ -1657,12 +1657,14 @@ export default function App() {
                 </div>
               )}
             </div>
-
-            {/* Embedded Active Metric: Horizontal Tuning Bar */}
-            {renderHorizontalTuningBar()}
           </div>
         )}
-          </div>
+
+        {/* High-visibility horizontal bar for tuning precision */}
+        <div id="shared-horizontal-tuning-bar" className="w-full mt-6">
+          {renderHorizontalTuningBar()}
+        </div>
+      </div>
 
           {/* New Chromatic Tone Wheel Visualization Section */}
           <div className="flex-none flex items-center justify-center w-full max-w-[320px] animate-fade-in">
