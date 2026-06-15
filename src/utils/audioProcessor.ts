@@ -26,7 +26,7 @@ export function detectGuitarPitch(buffer: Float32Array, sampleRate: number): num
   const rms = Math.sqrt(sumSq / SIZE);
   
   // Cutoff threshold to ignore background noise
-  if (rms < 0.007) {
+  if (rms < 0.012) {
     return -1;
   }
 
@@ -151,3 +151,35 @@ export function findClosestGuitarString(frequency: number): {
     centsDiff: finalCentsDiff,
   };
 }
+
+export interface ChromaticNoteInfo {
+  note: string;       // "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "H"
+  octave: number;     // e.g., 2, 3, 4
+  frequency: number;  // frequency of the perfect pitch
+  centsDiff: number;  // cents deviance from the perfect pitch
+  midi: number;
+}
+
+export function findClosestChromaticNote(frequency: number): ChromaticNoteInfo {
+  // standard formula based on A4 = 440Hz
+  const midi = Math.round(69 + 12 * Math.log2(frequency / 440));
+  // perfect frequency
+  const perfFreq = 440 * Math.pow(2, (midi - 69) / 12);
+  const centsDiff = 1200 * Math.log2(frequency / perfFreq);
+  
+  const noteNames = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "H"];
+  
+  // To avoid index out of bounds on extremely low frequencies
+  const positiveMidi = Math.max(0, midi);
+  const noteName = noteNames[positiveMidi % 12];
+  const octave = Math.floor(positiveMidi / 12) - 1;
+  
+  return {
+    note: noteName,
+    octave,
+    frequency: perfFreq,
+    centsDiff,
+    midi: positiveMidi
+  };
+}
+

@@ -6,7 +6,7 @@
 import { useEffect, useRef, useState, CSSProperties } from "react";
 import { Mic, MicOff, Volume2, Info, Settings, Zap, CheckCircle2, RefreshCw } from "lucide-react";
 import { STANDARD_GUITAR_STRINGS, GuitarString } from "./types";
-import { detectGuitarPitch, findClosestGuitarString } from "./utils/audioProcessor";
+import { detectGuitarPitch, findClosestGuitarString, findClosestChromaticNote } from "./utils/audioProcessor";
 
 // Tuning sensitivity presets
 interface SmoothingPreset {
@@ -140,7 +140,7 @@ export default function App() {
   const [selectedPreset, setSelectedPreset] = useState<SmoothingPreset>(SMOOTHING_PRESETS[1]); // Standard
   const [targetStringLock, setTargetStringLock] = useState<number | null>(null); // null = auto detect
   const [displayMode, setDisplayMode] = useState<"soundhole" | "led-bar">("soundhole");
-  const [selectedChord, setSelectedChord] = useState<Chord>(COMMON_CHORDS[0]);
+  const [selectedChord, setSelectedChord] = useState<Chord | null>(COMMON_CHORDS[0]);
   const [chordFilter, setChordFilter] = useState<"all" | "basis" | "7th" | "barre" | "sus" | "dim" | "pentatonic">("all");
 
   // Interactive "afterglow" state for the last strummed note / tuning delta
@@ -533,7 +533,7 @@ export default function App() {
         const freq = detectGuitarPitch(buffer, audioCtx.sampleRate);
 
         // Amplitude-based Pluck Onset Detection for Auto-Lock tracking
-        if (freq > 0 && rms > 0.010) {
+        if (freq > 0 && rms > 0.015) {
           const actualClosestRes = findClosestGuitarString(freq);
           const actualClosestStr = actualClosestRes.closestString;
 
@@ -553,11 +553,11 @@ export default function App() {
               lastPluckTimestampRef.current = now;
             }
           }
-        } else if (rms < 0.007) {
+        } else if (rms < 0.012) {
           isPluckActiveRef.current = false;
         }
 
-        if (freq > 0 && rms > 0.007) {
+        if (freq > 0 && rms > 0.012) {
           // Identify closest string or use manual lock
           let closestStr: GuitarString;
           let cents: number;
@@ -651,15 +651,17 @@ export default function App() {
 
   // Chord starting fret and category filtering calculations
   const allFretsList: number[] = [];
-  selectedChord.frets.forEach((f) => {
-    if (typeof f === "number" && f > 0) allFretsList.push(f);
-  });
-  if (selectedChord.multiNotes) {
-    selectedChord.multiNotes.forEach((m) => {
-      m.frets.forEach((f) => {
-        if (f > 0) allFretsList.push(f);
-      });
+  if (selectedChord) {
+    selectedChord.frets.forEach((f) => {
+      if (typeof f === "number" && f > 0) allFretsList.push(f);
     });
+    if (selectedChord.multiNotes) {
+      selectedChord.multiNotes.forEach((m) => {
+        m.frets.forEach((f) => {
+          if (f > 0) allFretsList.push(f);
+        });
+      });
+    }
   }
   const maxFret = allFretsList.length > 0 ? Math.max(...allFretsList) : 0;
   const startFret = maxFret > 5 ? Math.min(...allFretsList) : 1;
@@ -787,6 +789,279 @@ export default function App() {
             );
           })}
         </div>
+      </div>
+    );
+  };
+
+  // Render function for the gorgeous, reactive Chromatic Tone Wheel
+  const renderToneWheel = () => {
+    const CHROMATIC_SCALE = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "H"];
+    const GUITAR_NOTES_SET = new Set(["E", "A", "D", "G", "H"]); // standard guitar notes in German
+
+    let activeNoteName: string | null = null;
+    let activeCents = 0;
+    let displayOctave: number | null = null;
+
+    if (hasSignal && frequency > 0) {
+      const chrom = findClosestChromaticNote(frequency);
+      activeNoteName = chrom.note;
+      activeCents = chrom.centsDiff;
+      displayOctave = chrom.octave;
+    } else if (playingStringNum !== null) {
+      const playingStr = STANDARD_GUITAR_STRINGS.find(s => s.number === playingStringNum);
+      if (playingStr) {
+        activeNoteName = playingStr.note;
+        activeCents = 0;
+        // Parse octave from pitch (e.g. "E2" -> 2)
+        displayOctave = parseInt(playingStr.pitch.replace(/[^0-9]/g, "")) || null;
+      }
+    }
+
+    const activeIndex = activeNoteName ? CHROMATIC_SCALE.indexOf(activeNoteName) : -1;
+    
+    // Cents representation bounded from -50 to +50
+    const boundedCents = Math.max(-50, Math.min(50, activeCents));
+    const isWheelInTune = activeNoteName !== null && Math.abs(activeCents) <= 3;
+
+    return (
+      <div id="chromatic-tone-wheel" className="bg-neutral-900/60 border border-white/10 rounded-3xl p-5 flex flex-col items-center justify-center w-full max-w-[280px] sm:max-w-[320px] shadow-2xl transition-all duration-300">
+        <div className="text-center mb-3">
+          <span className="text-[10px] uppercase tracking-[0.25em] text-white/40 font-bold block">
+            CHROMATISCHES STIMMRAD 🎡
+          </span>
+          <span className="text-[9px] text-white/35 font-mono">
+            12-Ton Halbtonebene (C bis H)
+          </span>
+        </div>
+
+        {/* SVG Circle of Semitones */}
+        <div className="relative w-48 h-48 sm:w-52 sm:h-52 flex items-center justify-center">
+          {/* Circular SVG */}
+          <svg viewBox="0 0 220 220" className="w-full h-full">
+            {/* Outer ring boundary */}
+            <circle cx="110" cy="110" r="95" className="fill-none stroke-white/5 stroke-[1px]" />
+            <circle cx="110" cy="110" r="75" className="fill-none stroke-white/5 stroke-[1.5px] stroke-dashed" />
+            
+            {/* Ambient center backing glow */}
+            {activeNoteName !== null && (
+              <circle 
+                cx="110" 
+                cy="110" 
+                r="42" 
+                className={`transition-all duration-500 opacity-20 filter blur-md ${
+                  isWheelInTune ? "fill-green-500" : Math.abs(activeCents) <= 15 ? "fill-amber-500" : "fill-red-500"
+                }`} 
+              />
+            )}
+
+            {/* Glowing needle/arc sweep between notes */}
+            {activeNoteName !== null && (
+              (() => {
+                const startAngleDeg = activeIndex * 30 - 90;
+                // Scale cents deviation to angle: 1 cent = 0.3 degrees (offset of 30deg space between main notes)
+                const centsOffsetDeg = boundedCents * 0.3;
+                const endAngleDeg = startAngleDeg + centsOffsetDeg;
+
+                const startRad = (startAngleDeg * Math.PI) / 180;
+                const endRad = (endAngleDeg * Math.PI) / 180;
+
+                const xStart = 110 + 75 * Math.cos(startRad);
+                const yStart = 110 + 75 * Math.sin(startRad);
+                const xEnd = 110 + 75 * Math.cos(endRad);
+                const yEnd = 110 + 75 * Math.sin(endRad);
+
+                const largeArc = Math.abs(centsOffsetDeg) > 180 ? 1 : 0;
+                const sweepFlag = centsOffsetDeg > 0 ? 1 : 0;
+
+                const pathColor = isWheelInTune 
+                  ? "stroke-green-400 drop-shadow-[0_0_10px_#22c55e]" 
+                  : Math.abs(activeCents) <= 15 
+                    ? "stroke-yellow-400 drop-shadow-[0_0_8px_#eab308]" 
+                    : "stroke-red-400 drop-shadow-[0_0_8px_#ef4444]";
+
+                return (
+                  <g>
+                    {/* Sweep arc */}
+                    {Math.abs(centsOffsetDeg) > 0.5 && (
+                      <path
+                        d={`M ${xStart} ${yStart} A 75 75 0 ${largeArc} ${sweepFlag} ${xEnd} ${yEnd}`}
+                        fill="none"
+                        className={`${pathColor} stroke-[5px]`}
+                        strokeLinecap="round"
+                      />
+                    )}
+                    {/* Tick pointing to active target */}
+                    <line 
+                      x1={110 + 68 * Math.cos(endRad)} 
+                      y1={110 + 68 * Math.sin(endRad)} 
+                      x2={110 + 82 * Math.cos(endRad)} 
+                      y2={110 + 82 * Math.sin(endRad)}
+                      className={`${pathColor} stroke-[3.5px]`}
+                      strokeLinecap="round"
+                    />
+                  </g>
+                );
+              })()
+            )}
+
+            {/* Render 12 Chromatic Notes as beautiful Orbiting Nodes */}
+            {CHROMATIC_SCALE.map((note, index) => {
+              const angleDeg = index * 30 - 90;
+              const angleRad = (angleDeg * Math.PI) / 180;
+              
+              // Coordinates for note label
+              const labelRadius = 90;
+              const lx = 110 + labelRadius * Math.cos(angleRad);
+              const ly = 110 + labelRadius * Math.sin(angleRad);
+
+              // Coordinates for standard guitar string dot highlights
+              const dotRadius = 75;
+              const dx = 110 + dotRadius * Math.cos(angleRad);
+              const dy = 110 + dotRadius * Math.sin(angleRad);
+
+              const isActiveNote = activeNoteName === note;
+              const isGuitarNote = GUITAR_NOTES_SET.has(note);
+
+              let noteColor = "text-white/30 font-semibold";
+              let circleColor = "fill-white/10";
+
+              if (isActiveNote) {
+                if (isWheelInTune) {
+                  noteColor = "text-green-400 font-extrabold drop-shadow-[0_0_8px_#22c55e]";
+                  circleColor = "fill-green-400 shadow-[0_0_12px_#22c55e]";
+                } else if (Math.abs(activeCents) <= 15) {
+                  noteColor = "text-yellow-400 font-bold drop-shadow-[0_0_6px_#eab308]";
+                  circleColor = "fill-yellow-400";
+                } else {
+                  noteColor = "text-red-400 font-bold drop-shadow-[0_0_6px_#ef4444]";
+                  circleColor = "fill-red-400";
+                }
+              } else if (isGuitarNote) {
+                noteColor = "text-white/60 font-bold";
+                circleColor = "fill-white/30";
+              }
+
+              return (
+                <g key={note}>
+                  {/* Guitar standard string small highlights on the circle path */}
+                  {isGuitarNote && !isActiveNote && (
+                    <circle cx={dx} cy={dy} r="2" className="fill-amber-500/55" />
+                  )}
+
+                  {/* Active highlight background ring for notes */}
+                  {isActiveNote && (
+                    <circle cx={lx} cy={ly - 1} r="12" className="fill-white/5 stroke-white/10 stroke-[0.5px]" />
+                  )}
+
+                  {/* Note Label */}
+                  <text
+                    x={lx}
+                    y={ly + 3}
+                    textAnchor="middle"
+                    className={`font-sans text-[11px] select-none ${
+                      isActiveNote ? "font-bold text-sm" : "font-normal"
+                    }`}
+                    fill="currentColor"
+                  >
+                    <tspan className={noteColor}>{note}</tspan>
+                  </text>
+                </g>
+              );
+            })}
+          </svg>
+
+          {/* Center Digital HUD inside the Wheel */}
+          <div className="absolute inset-0 flex flex-col items-center justify-center text-center pointer-events-none select-none z-10">
+            {activeNoteName ? (
+              <div className="flex flex-col items-center justify-center animate-fade-in">
+                <span className={`text-[36px] sm:text-[40px] font-black leading-none tracking-tight ${
+                  isWheelInTune ? "text-green-400 animate-pulse" : Math.abs(activeCents) <= 15 ? "text-yellow-400" : "text-white/90"
+                }`}>
+                  {activeNoteName}
+                  {displayOctave !== null && (
+                    <span className="text-xs font-light text-white/30 ml-0.5 align-super">
+                      {displayOctave}
+                    </span>
+                  )}
+                </span>
+                
+                <span className={`text-[10px] font-mono font-bold uppercase tracking-wider mt-0.5 ${
+                  isWheelInTune ? "text-green-400" : Math.abs(activeCents) <= 15 ? "text-yellow-400/80" : "text-red-400/80"
+                }`}>
+                  {isWheelInTune 
+                    ? "PASST!" 
+                    : `${activeCents > 0 ? "+" : ""}${activeCents.toFixed(0)} Cent`
+                  }
+                </span>
+
+                {/* Arrow visualizer for rotation feedback */}
+                {!isWheelInTune && (
+                  <div className={`text-[10px] font-mono mt-1 ${activeCents > 0 ? "text-red-400" : "text-yellow-400"}`}>
+                    {activeCents > 0 ? "↺ DOWN" : "UP ↻"}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="flex flex-col items-center justify-center text-center opacity-25">
+                <div className="w-5 h-5 rounded-full border border-white/10 mb-1.5 flex items-center justify-center">
+                  <div className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
+                </div>
+                <span className="text-[10px] tracking-widest font-mono uppercase">STILL</span>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Dynamic Guided Prompt: What Comes Next Info Bar */}
+        {activeNoteName !== null && (
+          <div className="w-full mt-4 p-2.5 rounded-xl bg-black/40 border border-white/5 font-mono text-[10px] text-center select-none">
+            {(() => {
+              const activeIdx = CHROMATIC_SCALE.indexOf(activeNoteName);
+              const prevNoteName = CHROMATIC_SCALE[(activeIdx + 11) % 12];
+              const nextNoteName = CHROMATIC_SCALE[(activeIdx + 1) % 12];
+
+              if (isWheelInTune) {
+                return (
+                  <div className="text-green-400 font-bold flex items-center justify-center gap-1">
+                    <CheckCircle2 size={11} />
+                    <span>PERFEKT GESTIMMT!</span>
+                  </div>
+                );
+              }
+
+              if (activeCents < -3) {
+                return (
+                  <div className="flex flex-col items-center justify-center gap-1 text-white/70">
+                    <span className="text-yellow-400/80 font-bold uppercase tracking-wider">ZU SCHLAFF (TIEF)</span>
+                    <div className="flex items-center gap-1.5 mt-0.5 text-[11px]">
+                      <span className="text-white/25">{prevNoteName}</span>
+                      <span className="text-white/35">▶</span>
+                      <span className="text-amber-400 font-bold bg-amber-500/10 px-1.5 rounded">{activeNoteName}</span>
+                      <span className="text-white/40">─▶</span>
+                      <span className="text-white/25">{nextNoteName}</span>
+                    </div>
+                    <span className="text-[9px] text-white/40 mt-1">Spannen (nach rechts drehen)!</span>
+                  </div>
+                );
+              }
+
+              // Sharp
+              return (
+                <div className="flex flex-col items-center justify-center gap-1 text-white/70">
+                  <span className="text-red-400 font-bold uppercase tracking-wider font-sans">ZU STRAMM (HOCH)</span>
+                  <div className="flex items-center gap-1.5 mt-0.5 text-[11px]">
+                    <span className="text-white/25">{prevNoteName}</span>
+                    <span className="text-white/40">─▶</span>
+                    <span className="text-red-400 font-bold bg-red-500/10 px-1.5 rounded">{activeNoteName}</span>
+                    <span className="text-white/35">▶</span>
+                    <span className="text-white/25">{nextNoteName}</span>
+                  </div>
+                  <span className="text-[9px] text-white/40 mt-1">Lockern (nach links drehen)!</span>
+                </div>
+              );
+            })()}
+          </div>
+        )}
       </div>
     );
   };
@@ -1055,9 +1330,14 @@ export default function App() {
           </div>
         </div>
 
-        {displayMode === "soundhole" ? (
-          /* ==================== ACOUSTIC SOUNDHOLE CALIBRATOR ==================== */
-          <div className="relative z-10 flex flex-col items-center justify-center w-full my-auto">
+        {/* Real-time Dynamic dual visualizer layout */}
+        <div className="relative z-10 w-full max-w-5xl flex flex-col lg:flex-row items-center justify-center gap-8 lg:gap-12 xl:gap-16 my-auto px-2">
+          
+          {/* Main Selected Tuner Visualizer */}
+          <div className="flex-1 flex flex-col items-center justify-center w-full min-h-[360px] sm:min-h-[440px]">
+            {displayMode === "soundhole" ? (
+              /* ==================== ACOUSTIC SOUNDHOLE CALIBRATOR ==================== */
+              <div className="relative z-10 flex flex-col items-center justify-center w-full my-auto">
             {/* The Rosette Body container */}
             <div className="relative z-10 w-64 h-64 sm:w-[290px] sm:h-[290px] md:w-[325px] md:h-[325px] rounded-full p-[10px] bg-gradient-to-br from-[#8C5230] via-[#5C3218] to-[#2B1408] shadow-[0_20px_50px_rgba(0,0,0,0.85),inset_0_2px_12px_rgba(255,255,255,0.15)] border border-[#8C5230]/40 flex items-center justify-center select-none transition-all">
               
@@ -1382,6 +1662,14 @@ export default function App() {
             {renderHorizontalTuningBar()}
           </div>
         )}
+          </div>
+
+          {/* New Chromatic Tone Wheel Visualization Section */}
+          <div className="flex-none flex items-center justify-center w-full max-w-[320px] animate-fade-in">
+            {renderToneWheel()}
+          </div>
+
+        </div>
       </main>
 
       {/* Footer Interface Sector: Dial + Selector + Drawer Settings */}
@@ -1437,21 +1725,50 @@ export default function App() {
               <div className="flex justify-between items-center mb-4">
                 <div>
                   <h4 className="text-xs uppercase tracking-[0.2em] text-white/40 font-bold flex items-center gap-1.5">
-                    <Zap size={11} className="text-amber-500" />
-                    <span>Akkord-Bibliothek 📖</span>
+                    <Zap size={11} className={`text-amber-500 ${!selectedChord ? "animate-pulse" : ""}`} />
+                    <span>Akkord-Bibliothek & Freies Lauschen 📻</span>
                   </h4>
                   <p className="text-[10px] text-white/20 mt-0.5 font-mono">
-                    Wähle einen Akkord aus, um das Griffbild anzuzeigen und anzuschlagen
+                    {selectedChord 
+                      ? `Du hast den Akkord ${selectedChord.name} gewählt. Drücke "Freies Lauschen ↺" für automatische Erkennung!`
+                      : "FREIES LAUSCHEN AKTIV — Spiele Töne oder wähle einen Akkord aus!"
+                    }
                   </p>
                 </div>
-                <button 
-                  id="play-strum-chord"
-                  onClick={() => playChord(selectedChord)}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-amber-600 hover:bg-amber-500 text-white text-[10px] font-bold tracking-wider uppercase transition-all shadow-md shadow-amber-900/30 cursor-pointer"
-                >
-                  <Volume2 size={11} />
-                  <span>Anschlagen 🔊</span>
-                </button>
+                
+                <div className="flex gap-2">
+                  {selectedChord && (
+                    <button 
+                      id="reset-chord-free-listening"
+                      onClick={() => {
+                        setSelectedChord(null);
+                        setTargetStringLock(null);
+                        stopReferencePitch();
+                      }}
+                      className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-full bg-white/10 hover:bg-white/20 border border-white/10 text-white/90 text-[10px] font-bold tracking-wider uppercase transition-all shadow-md cursor-pointer select-none"
+                      title="Setze Akkordwahl zurück, um frei zu lauschen"
+                    >
+                      <RefreshCw size={11} className="text-emerald-400" />
+                      <span>Freies Lauschen ↺</span>
+                    </button>
+                  )}
+                  
+                  {selectedChord ? (
+                    <button 
+                      id="play-strum-chord"
+                      onClick={() => playChord(selectedChord)}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-amber-600 hover:bg-amber-500 text-white text-[10px] font-bold tracking-wider uppercase transition-all shadow-md shadow-amber-900/30 cursor-pointer"
+                    >
+                      <Volume2 size={11} />
+                      <span>Anschlagen 🔊</span>
+                    </button>
+                  ) : (
+                    <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-emerald-950/25 text-emerald-400 border border-emerald-500/25 text-[10px] font-bold tracking-wider uppercase">
+                      <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                      <span>Lauschen... 📻</span>
+                    </div>
+                  )}
+                </div>
               </div>
 
               {/* Categorization Tabs */}
@@ -1482,7 +1799,7 @@ export default function App() {
               {/* Grid of Chord Buttons */}
               <div className="grid grid-cols-4 sm:grid-cols-5 gap-1.5 w-full">
                 {filteredChords.map((chord) => {
-                  const isCurrent = selectedChord.name === chord.name;
+                  const isCurrent = selectedChord && selectedChord.name === chord.name;
                   return (
                     <button
                       id={`chord-btn-${chord.name.toLowerCase().replace(" ", "-").replace("#", "sharp")}`}
@@ -1506,20 +1823,28 @@ export default function App() {
             
             <div className="mt-4 flex flex-wrap gap-2 text-[10px] items-center text-white/35 font-mono">
               <span className="font-bold uppercase tracking-wider text-white/50">Details:</span>
-              <span>{selectedChord.multiNotes ? "Tonleiter Töne (Saiten frets):" : "Saiten (von links nach rechts):"}</span>
-              <span className="bg-white/5 px-2 py-0.5 rounded text-white/60 border border-white/10">
-                {selectedChord.multiNotes ? (
-                  selectedChord.multiNotes.map((m) => {
-                    const stringLabels = ["E/6", "A/5", "D/4", "G/3", "H/2", "E/1"];
-                    return `${stringLabels[m.stringIdx]}:${m.frets.join(",")}`;
-                  }).join(" | ")
-                ) : (
-                  selectedChord.frets.map((f, i) => {
-                    const stringLabels = ["E/6", "A/5", "D/4", "G/3", "H/2", "E/1"];
-                    return `${stringLabels[i]}:${f}`;
-                  }).join(" | ")
-                )}
-              </span>
+              {selectedChord ? (
+                <>
+                  <span>{selectedChord.multiNotes ? "Tonleiter Töne (Saiten frets):" : "Saiten (von links nach rechts):"}</span>
+                  <span className="bg-white/5 px-2 py-0.5 rounded text-white/60 border border-white/10">
+                    {selectedChord.multiNotes ? (
+                      selectedChord.multiNotes.map((m) => {
+                        const stringLabels = ["E/6", "A/5", "D/4", "G/3", "H/2", "E/1"];
+                        return `${stringLabels[m.stringIdx]}:${m.frets.join(",")}`;
+                      }).join(" | ")
+                    ) : (
+                      selectedChord.frets.map((f, i) => {
+                        const stringLabels = ["E/6", "A/5", "D/4", "G/3", "H/2", "E/1"];
+                        return `${stringLabels[i]}:${f}`;
+                      }).join(" | ")
+                    )}
+                  </span>
+                </>
+              ) : (
+                <span className="text-emerald-400 font-semibold bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/15">
+                  📻 FREIES LAUSCHEN AKTIV — Spiele deine Gitarre oder wähle oben einen Akkord aus!
+                </span>
+              )}
             </div>
           </div>
 
@@ -1604,7 +1929,7 @@ export default function App() {
               ))}
 
               {/* Transparent background guide for Barré chord block (Fingers) */}
-              {selectedChord.barre && (() => {
+              {selectedChord && selectedChord.barre && (() => {
                 const { fret, fromStringIdx, toStringIdx } = selectedChord.barre;
                 const relativeFret = fret - startFret + 1;
                 const yPos = 25 + (relativeFret - 0.5) * 20;
@@ -1624,7 +1949,50 @@ export default function App() {
               })()}
 
                {/* Open, Pressed or Muted Indicators */}
-              {selectedChord.multiNotes ? (
+              {!selectedChord ? (
+                // Free Listening dynamic representation on strings
+                Array.from({ length: 6 }).map((_, i) => {
+                  const xPos = 20 + i * 20;
+                  const currentStrNum = 6 - i;
+                  const isVibrating = hasSignal && closestString?.number === currentStrNum;
+
+                  return (
+                    <g key={`free-listening-string-graphic-${i}`}>
+                      <circle
+                        cx={xPos}
+                        cy={18}
+                        r={isVibrating ? 5.5 : 3}
+                        className={`transition-all duration-300 ${
+                          isVibrating 
+                            ? isInTune 
+                              ? "fill-green-400 stroke-green-300 stroke-[1.5] drop-shadow-[0_0_8px_#22c55e]" 
+                              : "fill-yellow-400 stroke-yellow-300 stroke-[1.5] drop-shadow-[0_0_8px_#eab308]"
+                            : "fill-none stroke-white/10 stroke-[1.2]"
+                        }`}
+                      />
+                      {isVibrating && (
+                        <>
+                          {/* Live wire glow effect */}
+                          <line
+                            x1={xPos}
+                            y1={25}
+                            x2={xPos}
+                            y2={125}
+                            className={`stroke-[2.5px] ${isInTune ? "stroke-green-400/80" : "stroke-yellow-400/80 animate-pulse"}`}
+                          />
+                          {/* Pulse traveling down */}
+                          <circle
+                            cx={xPos}
+                            cy={55}
+                            r="4.5"
+                            className={`animate-ping ${isInTune ? "fill-green-400" : "fill-yellow-400"}`}
+                          />
+                        </>
+                      )}
+                    </g>
+                  );
+                })
+              ) : selectedChord.multiNotes ? (
                 selectedChord.multiNotes.flatMap((mNotes) => {
                   const stringIdx = mNotes.stringIdx;
                   const xPos = 20 + stringIdx * 20;
